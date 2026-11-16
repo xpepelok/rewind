@@ -1,0 +1,308 @@
+diff -ruN '--exclude=Cargo.toml.orig' a/build.rs gpui/build.rs
+--- a/build.rs	2026-11-11 10:32:45.551397100 +0100
++++ gpui/build.rs	2026-11-11 12:08:42.952917000 +0100
+@@ -345,12 +345,17 @@
+             return path.trim().to_string();
+         }
+ 
+-        // Check the default path
+-        if Path::new(r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\fxc.exe")
+-            .exists()
+-        {
+-            return r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\fxc.exe"
+-                .to_string();
++        let kits = Path::new(r"C:\Program Files (x86)\Windows Kits\10\bin");
++        let mut versions: Vec<PathBuf> = fs::read_dir(kits)
++            .into_iter()
++            .flatten()
++            .flatten()
++            .map(|entry| entry.path().join("x64").join("fxc.exe"))
++            .filter(|path| path.exists())
++            .collect();
++        versions.sort();
++        if let Some(newest) = versions.pop() {
++            return newest.to_string_lossy().into_owned();
+         }
+ 
+         panic!("Failed to find fxc.exe");
+diff -ruN '--exclude=Cargo.toml.orig' a/src/platform/windows/platform.rs gpui/src/platform/windows/platform.rs
+--- a/src/platform/windows/platform.rs	2026-11-11 10:32:47.783885300 +0100
++++ gpui/src/platform/windows/platform.rs	2026-11-11 12:08:41.955782800 +0100
+@@ -28,6 +28,8 @@
+ 
+ use crate::*;
+ 
++const IDLE_DEVICE_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
++
+ pub(crate) struct WindowsPlatform {
+     inner: Rc<WindowsPlatformInner>,
+     raw_window_handles: Arc<RwLock<SmallVec<[SafeHwnd; 4]>>>,
+@@ -248,7 +250,9 @@
+             .spawn(move || {
+                 let vsync_provider = VSyncProvider::new();
+                 loop {
+-                    vsync_provider.wait_for_vsync();
++                    if wait_for_frame_request(IDLE_DEVICE_CHECK) {
++                        vsync_provider.wait_for_vsync();
++                    }
+                     if check_device_lost(&directx_device.device) {
+                         handle_gpu_device_lost(
+                             &mut directx_device,
+@@ -262,8 +266,12 @@
+                         break;
+                     };
+                     for hwnd in all_windows.read().iter() {
++                        let hwnd = hwnd.as_raw();
++                        if !take_frame_request(hwnd) {
++                            continue;
++                        }
+                         unsafe {
+-                            let _ = RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE);
++                            let _ = RedrawWindow(Some(hwnd), None, None, RDW_INVALIDATE);
+                         }
+                     }
+                 }
+@@ -734,6 +742,7 @@
+             log::error!("Failed to upgrade raw window handles");
+             return false;
+         };
++        forget_frame_request(target_window);
+         let mut lock = all_windows.write();
+         let index = lock
+             .iter()
+diff -ruN '--exclude=Cargo.toml.orig' a/src/platform/windows/vsync.rs gpui/src/platform/windows/vsync.rs
+--- a/src/platform/windows/vsync.rs	2026-11-11 10:32:47.798139000 +0100
++++ gpui/src/platform/windows/vsync.rs	2026-11-11 12:08:41.954784900 +0100
+@@ -1,5 +1,6 @@
+ use std::{
+-    sync::LazyLock,
++    collections::HashMap,
++    sync::{Arc, LazyLock},
+     time::{Duration, Instant},
+ };
+ 
+@@ -19,6 +20,47 @@
+     frequency as u64
+ });
+ 
++static FRAME_REQUESTS: LazyLock<parking_lot::Mutex<HashMap<isize, Arc<crate::FrameRequest>>>> =
++    LazyLock::new(Default::default);
++
++static FRAME_SIGNAL: (parking_lot::Mutex<bool>, parking_lot::Condvar) =
++    (parking_lot::Mutex::new(true), parking_lot::Condvar::new());
++
++fn signal_frame_request() {
++    let mut pending = FRAME_SIGNAL.0.lock();
++    *pending = true;
++    FRAME_SIGNAL.1.notify_one();
++}
++
++pub(crate) fn wait_for_frame_request(timeout: Duration) -> bool {
++    let mut pending = FRAME_SIGNAL.0.lock();
++    if !*pending {
++        FRAME_SIGNAL.1.wait_for(&mut pending, timeout);
++    }
++    std::mem::replace(&mut *pending, false)
++}
++
++pub(crate) fn frame_request_flag(hwnd: HWND) -> Arc<crate::FrameRequest> {
++    let flag = FRAME_REQUESTS
++        .lock()
++        .entry(hwnd.0 as isize)
++        .or_insert_with(|| Arc::new(crate::FrameRequest::new(signal_frame_request)))
++        .clone();
++    signal_frame_request();
++    flag
++}
++
++pub(crate) fn take_frame_request(hwnd: HWND) -> bool {
++    FRAME_REQUESTS
++        .lock()
++        .get(&(hwnd.0 as isize))
++        .is_none_or(|flag| flag.take())
++}
++
++pub(crate) fn forget_frame_request(hwnd: HWND) {
++    FRAME_REQUESTS.lock().remove(&(hwnd.0 as isize));
++}
++
+ const VSYNC_INTERVAL_THRESHOLD: Duration = Duration::from_millis(1);
+ const DEFAULT_VSYNC_INTERVAL: Duration = Duration::from_micros(16_666); // ~60Hz
+ 
+diff -ruN '--exclude=Cargo.toml.orig' a/src/platform/windows/window.rs gpui/src/platform/windows/window.rs
+--- a/src/platform/windows/window.rs	2026-11-11 10:32:47.816776500 +0100
++++ gpui/src/platform/windows/window.rs	2026-11-11 12:08:41.924656500 +0100
+@@ -461,7 +461,7 @@
+         register_drag_drop(&this)?;
+         configure_dwm_dark_mode(hwnd, appearance);
+         this.state.borrow_mut().border_offset.update(hwnd)?;
+-        let placement = retrieve_window_placement(
++        let mut placement = retrieve_window_placement(
+             hwnd,
+             display,
+             params.bounds,
+@@ -469,6 +469,9 @@
+             this.state.borrow().border_offset,
+         )?;
+         if params.show {
++            if !params.focus {
++                placement.showCmd = SW_SHOWNOACTIVATE.0 as u32;
++            }
+             unsafe { SetWindowPlacement(hwnd, &placement)? };
+         } else {
+             this.state.borrow_mut().initial_placement = Some(WindowOpenStatus {
+@@ -805,6 +808,10 @@
+         self.0.state.borrow_mut().callbacks.request_frame = Some(callback);
+     }
+ 
++    fn frame_request(&self) -> Option<std::sync::Arc<FrameRequest>> {
++        Some(frame_request_flag(self.0.hwnd))
++    }
++
+     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
+         self.0.state.borrow_mut().callbacks.input = Some(callback);
+     }
+diff -ruN '--exclude=Cargo.toml.orig' a/src/platform.rs gpui/src/platform.rs
+--- a/src/platform.rs	2026-11-11 10:32:47.866168700 +0100
++++ gpui/src/platform.rs	2026-11-11 12:08:42.172813000 +0100
+@@ -299,6 +299,36 @@
+     }
+ }
+ 
++#[doc(hidden)]
++pub struct FrameRequest {
++    pending: std::sync::atomic::AtomicBool,
++    wake: fn(),
++}
++
++#[doc(hidden)]
++impl FrameRequest {
++    pub fn new(wake: fn()) -> Self {
++        Self {
++            pending: std::sync::atomic::AtomicBool::new(true),
++            wake,
++        }
++    }
++
++    pub fn request(&self) {
++        if !self
++            .pending
++            .swap(true, std::sync::atomic::Ordering::AcqRel)
++        {
++            (self.wake)();
++        }
++    }
++
++    pub fn take(&self) -> bool {
++        self.pending
++            .swap(false, std::sync::atomic::Ordering::AcqRel)
++    }
++}
++
+ /// Metadata for a given [ScreenCaptureSource]
+ #[derive(Clone)]
+ pub struct SourceMetadata {
+@@ -499,6 +529,9 @@
+     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
+     fn draw(&self, scene: &Scene);
+     fn completed_frame(&self) {}
++    fn frame_request(&self) -> Option<Arc<FrameRequest>> {
++        None
++    }
+     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
+ 
+     // macOS specific methods
+diff -ruN '--exclude=Cargo.toml.orig' a/src/taffy.rs gpui/src/taffy.rs
+--- a/src/taffy.rs	2026-11-11 10:32:47.888826900 +0100
++++ gpui/src/taffy.rs	2026-11-11 12:08:42.209545100 +0100
+@@ -309,7 +309,7 @@
+             unit: &Option<u16>,
+         ) -> Vec<taffy::GridTemplateComponent<T>> {
+             // grid-template-columns: repeat(<number>, minmax(0, 1fr));
+-            unit.map(|count| vec![repeat(count, vec![minmax(length(0.0), fr(1.0))])])
++            unit.map(|count| vec![repeat(count, vec![minmax(length(0.0_f32), fr(1.0_f32))])])
+                 .unwrap_or_default()
+         }
+ 
+diff -ruN '--exclude=Cargo.toml.orig' a/src/window.rs gpui/src/window.rs
+--- a/src/window.rs	2026-11-11 10:32:48.126280800 +0100
++++ gpui/src/window.rs	2026-11-11 12:08:42.280269200 +0100
+@@ -93,6 +93,7 @@
+ 
+ struct WindowInvalidatorInner {
+     pub dirty: bool,
++    pub frame_request: Option<Arc<crate::FrameRequest>>,
+     pub draw_phase: DrawPhase,
+     pub dirty_views: FxHashSet<EntityId>,
+ }
+@@ -107,6 +108,7 @@
+         WindowInvalidator {
+             inner: Rc::new(RefCell::new(WindowInvalidatorInner {
+                 dirty: true,
++                frame_request: None,
+                 draw_phase: DrawPhase::None,
+                 dirty_views: FxHashSet::default(),
+             })),
+@@ -118,6 +120,7 @@
+         inner.dirty_views.insert(entity);
+         if inner.draw_phase == DrawPhase::None {
+             inner.dirty = true;
++            Self::wake(&inner);
+             cx.push_effect(Effect::Notify { emitter: entity });
+             true
+         } else {
+@@ -130,7 +133,25 @@
+     }
+ 
+     pub fn set_dirty(&self, dirty: bool) {
+-        self.inner.borrow_mut().dirty = dirty
++        let mut inner = self.inner.borrow_mut();
++        inner.dirty = dirty;
++        if dirty {
++            Self::wake(&inner);
++        }
++    }
++
++    pub fn set_frame_request(&self, flag: Option<Arc<crate::FrameRequest>>) {
++        self.inner.borrow_mut().frame_request = flag;
++    }
++
++    pub fn request_frame(&self) {
++        Self::wake(&self.inner.borrow());
++    }
++
++    fn wake(inner: &WindowInvalidatorInner) {
++        if let Some(flag) = &inner.frame_request {
++            flag.request();
++        }
+     }
+ 
+     pub fn set_phase(&self, phase: DrawPhase) {
+@@ -987,6 +1008,8 @@
+         let appearance = platform_window.appearance();
+         let text_system = Arc::new(WindowTextSystem::new(cx.text_system().clone()));
+         let invalidator = WindowInvalidator::new();
++        invalidator.set_frame_request(platform_window.frame_request());
++        invalidator.request_frame();
+         let active = Rc::new(Cell::new(platform_window.is_active()));
+         let hovered = Rc::new(Cell::new(platform_window.is_hovered()));
+         let needs_present = Rc::new(Cell::new(false));
+@@ -1063,6 +1086,10 @@
+                         window.complete_frame();
+                     })
+                     .log_err();
++
++                if invalidator.is_dirty() || needs_present {
++                    invalidator.request_frame();
++                }
+             }
+         }));
+         platform_window.on_resize(Box::new({
+@@ -1643,6 +1670,7 @@
+     /// Schedule the given closure to be run directly after the current frame is rendered.
+     pub fn on_next_frame(&self, callback: impl FnOnce(&mut Window, &mut App) + 'static) {
+         RefCell::borrow_mut(&self.next_frame_callbacks).push(Box::new(callback));
++        self.invalidator.request_frame();
+     }
+ 
+     /// Schedule a frame to be drawn on the next animation frame.

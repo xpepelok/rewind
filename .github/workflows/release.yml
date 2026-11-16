@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      release: ${{ steps.read.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the workspace version
+        id: read
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(awk '/^\[workspace\.package\]/{found=1} found && /^version *=/{gsub(/[" ]/,"",$0); sub(/^version=/,"",$0); print; exit}' Cargo.toml)
+          if [ -z "$version" ]; then
+            echo "version not found in Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "v$version is already released, nothing to do"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "v$version has no release yet, building"
+          fi
+
+  build:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked -p rewind
+
+      - name: Name the installer
+        run: Copy-Item target/release/Rewind.exe Rewind-Setup.exe
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v${{ needs.version.outputs.version }}" Rewind-Setup.exe --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Rewind ${{ needs.version.outputs.version }}" --generate-notes

@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+exclude = ["vendor"]
+members = [
+    "apps/rewind",
+    "crates/capture",
+    "crates/config",
+    "crates/hotkey",
+    "crates/media",
+    "crates/nvbus",
+    "crates/youtube",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[workspace.dependencies]
+rewind-capture = { path = "crates/capture" }
+rewind-config = { path = "crates/config" }
+rewind-hotkey = { path = "crates/hotkey" }
+rewind-media = { path = "crates/media" }
+rewind-nvbus = { path = "crates/nvbus" }
+anyhow = "1"
+futures = { version = "0.3", default-features = false, features = ["std", "alloc", "async-await", "executor"] }
+gpui = "0.2.2"
+parking_lot = "0.12"
+raw-window-handle = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+windows = "0.61"
+youtube = { path = "crates/youtube" }
+
+[workspace.lints.rust]
+unused = { level = "warn", priority = -1 }
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }
