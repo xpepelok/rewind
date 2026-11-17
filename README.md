@@ -13,7 +13,7 @@ Rewind постоянно хранит последние минуты игры.
 <img src="https://img.shields.io/badge/платформа-Windows%2010%2F11-76B900?style=flat-square" alt="платформа">
 <img src="https://img.shields.io/badge/на-Rust-76B900?style=flat-square" alt="Rust">
 <img src="https://img.shields.io/badge/интерфейс-gpui-76B900?style=flat-square" alt="gpui">
-<img src="https://img.shields.io/badge/лицензия-MIT-444?style=flat-square" alt="MIT">
+<a href="LICENSE"><img src="https://img.shields.io/badge/лицензия-MIT-444?style=flat-square" alt="MIT"></a>
 
 </div>
 
@@ -172,7 +172,7 @@ cargo build --release -p rewind
 
 ## Лицензия
 
-MIT.
+Проект распространяется по лицензии [MIT](LICENSE).
 
 ## Благодарности
 
