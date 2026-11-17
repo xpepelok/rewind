@@ -57,12 +57,14 @@ fn place(window: &Window, extent: Extent, cx: &gpui::App) {
         .detach();
 }
 
-const fn folded(full: Extent) -> Extent {
+const PARKED: i32 = -32000;
+
+const fn folded() -> Extent {
     Extent {
-        left: full.left,
-        top: full.top,
-        right: full.left + FOLDED,
-        bottom: full.top + FOLDED,
+        left: PARKED,
+        top: PARKED,
+        right: PARKED + FOLDED,
+        bottom: PARKED + FOLDED,
     }
 }
 
@@ -135,7 +137,7 @@ pub fn fold(window: &Window, cx: &gpui::App) -> Option<Extent> {
     let mut full = Extent::default();
     unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd(window)?, &mut full) }
         .ok()?;
-    place(window, folded(full), cx);
+    place(window, folded(), cx);
     Some(full)
 }
 
@@ -293,15 +295,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_folded_window_keeps_its_corner_and_shrinks_to_a_dot() {
-        let full = Extent {
-            left: -1920,
-            top: 360,
-            right: 0,
-            bottom: 1440,
-        };
-        let small = folded(full);
-        assert_eq!((small.left, small.top), (full.left, full.top));
+    fn a_folded_window_is_a_dot_far_outside_every_screen() {
+        const SMALLEST_FRAME: i32 = 400;
+        let small = folded();
         assert_eq!((small.right - small.left, small.bottom - small.top), (1, 1));
+        assert!(small.left + SMALLEST_FRAME < -16000);
+        assert!(small.top + SMALLEST_FRAME < -16000);
     }
 }

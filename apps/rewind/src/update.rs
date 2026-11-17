@@ -165,6 +165,22 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "talks to GitHub"]
+    fn the_published_release_is_found_and_downloadable() {
+        let response = Session::new(AGENT)
+            .expect("session")
+            .get(API_HOST, LATEST_PATH)
+            .expect("request");
+        assert_eq!(response.status, 200);
+        let release = parse(&response.body).expect("a release with an installer");
+        assert!(newer("0.1.0", &release.version), "{}", release.version);
+        let path = download(&release).expect("download");
+        let size = std::fs::metadata(&path).expect("file").len();
+        assert!(size > MIN_SIZE as u64);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn only_a_higher_version_counts_as_an_update() {
         assert!(newer("0.1.0", "v0.1.1"));
         assert!(newer("0.1.0", "0.2"));
