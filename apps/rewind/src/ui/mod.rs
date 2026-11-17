@@ -7,9 +7,8 @@ use std::rc::Rc;
 
 use gpui::{
     App, Bounds, Context, DispatchPhase, Div, ElementId, FontWeight, Hsla, IntoElement,
-    MouseButton, ObjectFit, Pixels, Render, RenderOnce, ScrollHandle, ScrollWheelEvent,
-    SharedString, Window, anchored, canvas, deferred, div, fill, img, point, prelude::*, px,
-    relative, size,
+    MouseButton, ObjectFit, Pixels, Render, RenderOnce, ScrollEvent, ScrollHandle, SharedString,
+    Window, anchored, canvas, deferred, div, fill, img, point, prelude::*, px, relative, size,
 };
 
 use crate::assets::{Icon, icon};
@@ -480,7 +479,7 @@ impl RenderOnce for Dropdown {
                 canvas(
                     |_, _, _| (),
                     move |_, _, window, _| {
-                        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, _| {
+                        window.on_mouse_event(move |event: &ScrollEvent, phase, window, _| {
                             if phase != DispatchPhase::Bubble
                                 || scroll.bounds().contains(&event.position)
                             {
@@ -512,7 +511,7 @@ impl RenderOnce for Dropdown {
                             .rounded(px(p.radius()))
                             .shadow(p.toast_shadow())
                             .occlude()
-                            .on_scroll_wheel(|_, window, _| window.refresh())
+                            .on_scroll(|_, window, _| window.refresh())
                             .child(
                                 div()
                                     .id("options-scroll")

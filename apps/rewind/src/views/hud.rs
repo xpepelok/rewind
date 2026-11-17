@@ -191,8 +191,8 @@ fn anchored(corner: Corner, content: Div) -> Option<Div> {
 
 fn spaced(fraction: f32, content: Div, vertical: bool) -> Div {
     let fraction = fraction.clamp(0.0, 1.0);
-    let before = div().flex_shrink().flex_basis(relative(fraction));
-    let after = div().flex_shrink().flex_basis(relative(1.0 - fraction));
+    let before = div().flex_shrink_1().flex_basis(relative(fraction));
+    let after = div().flex_shrink_1().flex_basis(relative(1.0 - fraction));
     let line = if vertical {
         div().size_full().flex().flex_col()
     } else {

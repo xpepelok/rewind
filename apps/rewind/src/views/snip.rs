@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, Bounds, Context, CursorStyle, Entity, FocusHandle, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, Render,
-    ScrollWheelEvent, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div,
-    img, prelude::*, px,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, Render, ScrollEvent,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, img, prelude::*, px,
 };
 
 use rewind_media::{draw_text, render_marks};
@@ -331,7 +330,7 @@ impl Snip {
             crate::platform::window::cover(window, monitor);
         });
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         let (copy_on_select, host) = {
             let shared = session.read(cx);
             (shared.copy_on_select, shared.host)
@@ -556,7 +555,7 @@ impl Snip {
         cx.notify();
     }
 
-    fn wheel(&mut self, event: &ScrollWheelEvent, _: &mut gpui::Window, cx: &mut Context<Self>) {
+    fn wheel(&mut self, event: &ScrollEvent, _: &mut gpui::Window, cx: &mut Context<Self>) {
         if self.annotating() {
             self.board.wheel(event, cx);
         }
@@ -657,22 +656,19 @@ impl Snip {
             let state = self.state.clone();
             cx.spawn(async move |_, cx| {
                 let (width, height, pixels) = crop;
-                let (pixels, width, height) = cx
-                    .background_executor()
-                    .spawn(async move {
-                        render_marks(pixels, width, height, &marks, None, &draw_text)
-                    })
-                    .await;
+                let (pixels, width, height) =
+                    cx.background_executor()
+                        .spawn(async move {
+                            render_marks(pixels, width, height, &marks, None, &draw_text)
+                        })
+                        .await;
                 if pinned {
-                    cx.update(|cx| crate::views::pin::open(width, height, pixels, at, scale, cx))
-                        .ok();
+                    cx.update(|cx| crate::views::pin::open(width, height, pixels, at, scale, cx));
                     return;
                 }
-                state
-                    .update(cx, |rewind, cx| {
-                        rewind.keep_snip((width, height, pixels), action, cx)
-                    })
-                    .ok();
+                state.update(cx, |rewind, cx| {
+                    rewind.keep_snip((width, height, pixels), action, cx)
+                });
             })
             .detach();
         }
@@ -1068,7 +1064,7 @@ impl Render for Snip {
             )
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
-            .on_scroll_wheel(cx.listener(Self::wheel))
+            .on_scroll(cx.listener(Self::wheel))
             .children(backdrop.map(|backdrop| {
                 backdrop
                     .absolute()

@@ -61,7 +61,7 @@ impl RenderOnce for Scrollbar {
         let handle = self.handle;
         let area = handle.bounds();
         let view = f32::from(area.size.height);
-        let range = f32::from(handle.max_offset().height);
+        let range = f32::from(handle.max_offset().y);
         let scrolled = -f32::from(handle.offset().y);
         let Some((top, length)) = thumb(view, range, scrolled) else {
             return div().into_any_element();
@@ -150,6 +150,54 @@ impl RenderOnce for Scrollbar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Tall {
+        handle: ScrollHandle,
+    }
+
+    impl gpui::Render for Tall {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let content = div()
+                .id("tall")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&self.handle)
+                .child(div().h(px(5000.0)))
+                .into_any_element();
+            div().size_full().flex().flex_col().child(with_scrollbar(
+                content,
+                "tall-bar",
+                &self.handle,
+            ))
+        }
+    }
+
+    #[gpui::test]
+    fn a_long_list_is_drawn_with_a_thumb_that_follows_the_offset(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::theme::install);
+        let (view, cx) = cx.add_window_view(|_, _| Tall {
+            handle: ScrollHandle::new(),
+        });
+        let handle = view.read_with(cx, |tall, _| tall.handle.clone());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let view_height = f32::from(handle.bounds().size.height);
+        let range = f32::from(handle.max_offset().y);
+        assert!(view_height > 0.0);
+        assert_eq!(range, 5000.0 - view_height);
+        let (top, length) = thumb(view_height, range, 0.0).unwrap();
+        assert_eq!(top, 0.0);
+
+        handle.set_offset(point(px(0.0), px(-range)));
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        let scrolled = -f32::from(handle.offset().y);
+        assert_eq!(scrolled, range);
+        let (bottom, _) = thumb(view_height, range, scrolled).unwrap();
+        assert_eq!(bottom + length, view_height);
+    }
 
     #[test]
     fn nothing_to_scroll_shows_no_thumb() {

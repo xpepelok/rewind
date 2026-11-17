@@ -13,7 +13,7 @@ members = [
 [workspace.package]
 version = "0.1.1"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.98"
 license = "MIT"
 
 [workspace.dependencies]
@@ -24,7 +24,8 @@ rewind-media = { path = "crates/media" }
 rewind-nvbus = { path = "crates/nvbus" }
 anyhow = "1"
 futures = { version = "0.3", default-features = false, features = ["std", "alloc", "async-await", "executor"] }
-gpui = "0.2.2"
+gpui = { git = "https://github.com/xpepelok/zed", rev = "ea4c69cfbbf2643428d5ac8496cc30f717259da2" }
+gpui_platform = { git = "https://github.com/xpepelok/zed", rev = "ea4c69cfbbf2643428d5ac8496cc30f717259da2" }
 parking_lot = "0.12"
 raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
@@ -47,6 +48,3 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
-
-[patch.crates-io]
-gpui = { git = "https://github.com/xpepelok/gpui", rev = "51ea45ba0ecf9091d1823959d73fff178b0e6a1f" }

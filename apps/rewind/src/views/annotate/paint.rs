@@ -1,6 +1,6 @@
 use gpui::{
-    AnyElement, Bounds, Context, FontWeight, Hsla, PathBuilder, Pixels, Window, canvas,
-    div, fill, point, prelude::*, px, size,
+    AnyElement, Bounds, Context, FontWeight, Hsla, PathBuilder, Pixels, Window, canvas, div, fill,
+    point, prelude::*, px, size,
 };
 
 use rewind_media::{
@@ -8,7 +8,10 @@ use rewind_media::{
     polylines, stroke_thickness,
 };
 
-use super::{Annotate, Board, CROP_HANDLE, CROP_LINE_GRAB, Edge, FONTS, Tool, color_of, picture_rect, to_screen};
+use super::{
+    Annotate, Board, CROP_HANDLE, CROP_LINE_GRAB, Edge, FONTS, Tool, color_of, picture_rect,
+    to_screen,
+};
 use crate::theme::{FONT_FAMILY, Palette, SMALL_TEXT, alpha};
 
 const SHADE: f32 = 0.6;
@@ -351,22 +354,20 @@ pub fn crop_handles(board: &Board, p: &Palette) -> Vec<AnyElement> {
             .cursor(edge.cursor())
             .into_any_element()
     });
-    let handles = Edge::ALL
-        .into_iter()
-        .map(|edge| {
-            let (ux, uy) = edge.anchor(area);
-            let (x, y) = to_screen(picture, (ux, uy));
-            div()
-                .absolute()
-                .left(px(x - origin.0 - CROP_HANDLE / 2.0))
-                .top(px(y - origin.1 - CROP_HANDLE / 2.0))
-                .size(px(CROP_HANDLE))
-                .bg(p.accent)
-                .border_1()
-                .border_color(p.white)
-                .cursor(edge.cursor())
-                .into_any_element()
-        });
+    let handles = Edge::ALL.into_iter().map(|edge| {
+        let (ux, uy) = edge.anchor(area);
+        let (x, y) = to_screen(picture, (ux, uy));
+        div()
+            .absolute()
+            .left(px(x - origin.0 - CROP_HANDLE / 2.0))
+            .top(px(y - origin.1 - CROP_HANDLE / 2.0))
+            .size(px(CROP_HANDLE))
+            .bg(p.accent)
+            .border_1()
+            .border_color(p.white)
+            .cursor(edge.cursor())
+            .into_any_element()
+    });
     lines.chain(handles).collect()
 }
 

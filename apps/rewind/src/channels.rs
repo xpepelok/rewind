@@ -757,8 +757,7 @@ impl Rewind {
                     .background_executor()
                     .spawn(async move { upload(&directory, &shared, &job, &live) })
                     .await;
-                let alive =
-                    this.update(cx, |rewind, cx| rewind.upload_finished(task, outcome, cx));
+                let alive = this.update(cx, |rewind, cx| rewind.upload_finished(task, outcome, cx));
                 if alive.is_err() {
                     break;
                 }

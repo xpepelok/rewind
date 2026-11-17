@@ -491,7 +491,7 @@ impl TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         let index = self.index_for_position(event.position);
         if self.selected.is_empty() {
             self.move_to(index, cx);
@@ -708,7 +708,7 @@ impl TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         self.menu = None;
         self.selecting = true;
         let index = self.index_for_position(event.position);
@@ -1198,7 +1198,8 @@ impl Element for LineElement {
                 bounds.origin.x + prepaint.shift,
                 bounds.origin.y + line_height * row as f32,
             );
-            line.paint(origin, line_height, window, cx).ok();
+            line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx)
+                .ok();
         }
         if let Some(caret) = prepaint.caret.take() {
             window.paint_quad(caret);
@@ -1347,6 +1348,26 @@ mod tests {
                 assert_eq!(input.word_at(1), 0..2);
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_focused_field_is_painted_and_takes_typed_text(cx: &mut TestAppContext) {
+        cx.update(crate::theme::install);
+        let (input, cx) = cx.add_window_view(|window, cx| TextInput::new("", window, cx));
+        cx.update(|window, cx| {
+            let focus = input.read(cx).focus.clone();
+            window.focus(&focus, cx);
+            window.draw(cx).clear(cx);
+        });
+        cx.simulate_input("кадр");
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+            let input = input.read(cx);
+            assert_eq!(input.text(), "кадр");
+            assert!(input.focus.is_focused(window));
+            assert!(input.bounds.is_some());
+        });
     }
 
     #[gpui::test]

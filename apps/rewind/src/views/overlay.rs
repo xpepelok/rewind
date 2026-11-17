@@ -284,7 +284,7 @@ impl Overlay {
                 |overlay, _, event: &InputEvent, window, cx| match event {
                     InputEvent::Submit => {
                         overlay.commit_replay_input(cx);
-                        window.focus(&overlay.focus);
+                        window.focus(&overlay.focus, cx);
                     }
                     InputEvent::Blur => overlay.commit_replay_input(cx),
                     InputEvent::Changed => {}
@@ -467,7 +467,7 @@ impl Overlay {
         self.leaving = None;
         self.page_picker = None;
         platform::window::show_overlay(window);
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         motion::stop(ENTER, window, cx);
         motion::stop(LEAVE, window, cx);
         motion::stop(BACK, window, cx);
@@ -491,7 +491,7 @@ impl Overlay {
         self.clear_selection(cx);
         self.confirm_delete = None;
         self.close_viewer(window, cx);
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         self.state.update(cx, |rewind, cx| {
             rewind.cancel_sign_in();
             if rewind.capturing.is_some() {
@@ -646,14 +646,14 @@ impl Overlay {
     pub fn close_viewer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((picture, _)) = self.photo.take() {
             picture.update(cx, |picture, cx| picture.release(window, cx));
-            window.focus(&self.focus);
+            window.focus(&self.focus, cx);
             cx.notify();
         }
         let Some((editor, _)) = self.viewer.take() else {
             return;
         };
         editor.update(cx, |editor, cx| editor.release_player(window, cx));
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -952,42 +952,40 @@ impl Overlay {
             );
         let title_size = TITLE_TEXT + (PAGE_TITLE_TEXT - TITLE_TEXT) * back;
         let title = if home { APP_TITLE } else { page.title() };
-        let mut bar = bar
-            .pl(px(GUTTER - 6.0))
-            .child(back_slot)
-            .child(
-                strong(title, title_size, p.title)
-                    .flex_1()
-                    .min_w_0()
-                    .ml(px(TITLE_SHIFT * (1.0 - back))),
-            );
+        let mut bar = bar.pl(px(GUTTER - 6.0)).child(back_slot).child(
+            strong(title, title_size, p.title)
+                .flex_1()
+                .min_w_0()
+                .ml(px(TITLE_SHIFT * (1.0 - back))),
+        );
         if home && self.state.read(cx).release.is_some() {
-            bar = bar.child(
-                div()
-                    .id("update-bell")
-                    .flex_none()
-                    .relative()
-                    .p(px(6.0))
-                    .mr(px(12.0))
-                    .cursor_pointer()
-                    .opacity(1.0 - back)
-                    .child(icon(Icon::Bell, ICON, p.title))
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(4.0))
-                            .right(px(4.0))
-                            .size(px(9.0))
-                            .rounded_full()
-                            .bg(crate::theme::rgb(UPDATE_DOT))
-                            .border_1()
-                            .border_color(p.header),
-                    )
-                    .tooltip(crate::ui::Tooltip::text("Доступно обновление"))
-                    .on_click(
-                        cx.listener(|overlay, _, window, cx| overlay.push(Page::Update, window, cx)),
-                    ),
-            );
+            bar =
+                bar.child(
+                    div()
+                        .id("update-bell")
+                        .flex_none()
+                        .relative()
+                        .p(px(6.0))
+                        .mr(px(12.0))
+                        .cursor_pointer()
+                        .opacity(1.0 - back)
+                        .child(icon(Icon::Bell, ICON, p.title))
+                        .child(
+                            div()
+                                .absolute()
+                                .top(px(4.0))
+                                .right(px(4.0))
+                                .size(px(9.0))
+                                .rounded_full()
+                                .bg(crate::theme::rgb(UPDATE_DOT))
+                                .border_1()
+                                .border_color(p.header),
+                        )
+                        .tooltip(crate::ui::Tooltip::text("Доступно обновление"))
+                        .on_click(cx.listener(|overlay, _, window, cx| {
+                            overlay.push(Page::Update, window, cx)
+                        })),
+                );
         }
         if home {
             bar = bar.child(
@@ -999,9 +997,9 @@ impl Overlay {
                     .cursor_pointer()
                     .opacity(1.0 - back)
                     .child(icon(Icon::Settings, ICON, p.title))
-                    .on_click(
-                        cx.listener(|overlay, _, window, cx| overlay.push(Page::Settings, window, cx)),
-                    ),
+                    .on_click(cx.listener(|overlay, _, window, cx| {
+                        overlay.push(Page::Settings, window, cx)
+                    })),
             );
         }
         bar.child(close).into_any_element()
@@ -1242,21 +1240,17 @@ impl Render for Overlay {
                             }
                         }),
                     )
-                    .on_scroll_wheel(cx.listener(
-                        |overlay, event: &gpui::ScrollWheelEvent, _, cx| {
-                            if !overlay.steers(cx) {
-                                return;
-                            }
-                            let lines = match event.delta {
-                                gpui::ScrollDelta::Lines(lines) => lines.y,
-                                gpui::ScrollDelta::Pixels(pixels) => {
-                                    f32::from(pixels.y) / WHEEL_LINE
-                                }
-                            };
-                            let turn = (lines * WHEEL_NOTCH).round() as i32;
-                            overlay.steer(WM_MOUSEWHEEL, turn << 16, 0, false, cx);
-                        },
-                    )),
+                    .on_scroll(cx.listener(|overlay, event: &gpui::ScrollEvent, _, cx| {
+                        if !overlay.steers(cx) {
+                            return;
+                        }
+                        let lines = match event.delta {
+                            gpui::ScrollDelta::Lines(lines) => lines.y,
+                            gpui::ScrollDelta::Pixels(pixels) => f32::from(pixels.y) / WHEEL_LINE,
+                        };
+                        let turn = (lines * WHEEL_NOTCH).round() as i32;
+                        overlay.steer(WM_MOUSEWHEEL, turn << 16, 0, false, cx);
+                    })),
             )
             .children(viewer)
             .children(previous)

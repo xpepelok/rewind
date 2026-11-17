@@ -70,8 +70,8 @@ const fn folded() -> Extent {
 
 pub fn pin(window: &Window, extent: Extent, accent: u32, cx: &gpui::App) {
     use windows::Win32::Graphics::Dwm::{
-        DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
-        DWM_WINDOW_CORNER_PREFERENCE, DwmSetWindowAttribute,
+        DWM_WINDOW_CORNER_PREFERENCE, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_DONOTROUND, DwmSetWindowAttribute,
     };
     use windows::Win32::UI::WindowsAndMessaging::SWP_SHOWWINDOW;
     let Some(hwnd) = hwnd(window) else {

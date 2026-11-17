@@ -326,7 +326,7 @@ impl Overlay {
         let speed =
             (overshoot.abs() * SCROLL_GAIN).clamp(SCROLL_MIN, SCROLL_MAX) * overshoot.signum();
         let offset = scroll.offset();
-        let max = f32::from(scroll.max_offset().height);
+        let max = f32::from(scroll.max_offset().y);
         let next = (f32::from(offset.y) - speed).clamp(-max, 0.0);
         if (next - f32::from(offset.y)).abs() < 0.01 {
             return true;

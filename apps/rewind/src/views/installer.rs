@@ -9,8 +9,8 @@ use gpui::{
 use crate::assets::{Icon, icon};
 use crate::platform::system;
 use crate::theme::{FONT_FAMILY, Palette, SMALL_TEXT, ThemeExt, alpha, rgb, rgba};
-use gpui::Hsla;
 use crate::ui::strong;
+use gpui::Hsla;
 
 const TITLEBAR: f32 = 40.0;
 const LOGO_MARK: f32 = 22.0;
@@ -231,7 +231,6 @@ impl Installer {
         self.slide = index;
         cx.notify();
     }
-
 }
 
 fn version_key(value: &str) -> Vec<u64> {
@@ -260,7 +259,12 @@ fn mark(size: f32, radius: f32) -> impl IntoElement {
         .child(icon(Icon::Replay, size * 0.6, rgb(0x8acb14)))
 }
 
-fn nav_btn(id: &'static str, glyph: Icon, delta: i32, cx: &mut Context<Installer>) -> Stateful<gpui::Div> {
+fn nav_btn(
+    id: &'static str,
+    glyph: Icon,
+    delta: i32,
+    cx: &mut Context<Installer>,
+) -> Stateful<gpui::Div> {
     div()
         .id(id)
         .flex_none()
@@ -355,8 +359,14 @@ impl Installer {
     fn actions(&self, p: &Palette, cx: &mut Context<Self>) -> gpui::Div {
         match &self.phase {
             Phase::Choose if !self.installed => div().w_full().child(
-                cta("install", "Установить", p.accent, p.accent_hover, p.check_mark)
-                    .on_click(cx.listener(|installer, _, _, cx| installer.run(Job::Install, cx))),
+                cta(
+                    "install",
+                    "Установить",
+                    p.accent,
+                    p.accent_hover,
+                    p.check_mark,
+                )
+                .on_click(cx.listener(|installer, _, _, cx| installer.run(Job::Install, cx))),
             ),
             Phase::Choose => {
                 let current = version_key(Self::CURRENT);
@@ -375,16 +385,24 @@ impl Installer {
                     .items_center()
                     .gap(px(8.0))
                     .child(
-                        cta("uninstall", "Деинсталлировать", p.record, rgb(0xf04545), p.white)
-                            .flex_1()
-                            .on_click(
-                                cx.listener(|installer, _, _, cx| installer.run(Job::Uninstall, cx)),
-                            ),
+                        cta(
+                            "uninstall",
+                            "Деинсталлировать",
+                            p.record,
+                            rgb(0xf04545),
+                            p.white,
+                        )
+                        .flex_1()
+                        .on_click(
+                            cx.listener(|installer, _, _, cx| installer.run(Job::Uninstall, cx)),
+                        ),
                     )
                     .child(
                         cta("main", label, p.accent, p.accent_hover, p.check_mark)
                             .flex_1()
-                            .on_click(cx.listener(move |installer, _, _, cx| installer.run(job, cx))),
+                            .on_click(
+                                cx.listener(move |installer, _, _, cx| installer.run(job, cx)),
+                            ),
                     )
             }
             Phase::Working(_) => div(),
@@ -459,17 +477,19 @@ impl Render for Installer {
             Phase::Done { ok: false, .. } => ("Не удалось".to_owned(), 1.0, p.record),
         };
 
-        let dots: Vec<_> = (0..SLIDES.len()).map(|index| {
-            let active = index == self.slide;
-            div()
-                .id(("dot", index))
-                .flex_none()
-                .size(px(7.0))
-                .rounded_full()
-                .bg(if active { p.accent } else { p.dots })
-                .cursor_pointer()
-                .on_click(cx.listener(move |installer, _, _, cx| installer.jump(index, cx)))
-        }).collect();
+        let dots: Vec<_> = (0..SLIDES.len())
+            .map(|index| {
+                let active = index == self.slide;
+                div()
+                    .id(("dot", index))
+                    .flex_none()
+                    .size(px(7.0))
+                    .rounded_full()
+                    .bg(if active { p.accent } else { p.dots })
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |installer, _, _, cx| installer.jump(index, cx)))
+            })
+            .collect();
 
         let nav = choosing.then(|| {
             div()
@@ -562,47 +582,45 @@ impl Render for Installer {
             .child(caption)
             .child(shot_col);
 
-        let progress = div()
-            .w(px(TEXT_W))
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .child(
-                div()
-                    .flex()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(SMALL_TEXT))
-                            .text_color(p.muted)
-                            .child(bar_label),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(SMALL_TEXT))
-                            .text_color(p.muted)
-                            .child(if working {
+        let progress =
+            div()
+                .w(px(TEXT_W))
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(px(SMALL_TEXT))
+                                .text_color(p.muted)
+                                .child(bar_label),
+                        )
+                        .child(div().text_size(px(SMALL_TEXT)).text_color(p.muted).child(
+                            if working {
                                 format!("{pct}%")
                             } else {
                                 String::new()
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .h(px(6.0))
-                    .rounded_full()
-                    .bg(p.track)
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .h_full()
-                            .w(relative(bar_fill))
-                            .rounded_full()
-                            .bg(bar_color),
-                    ),
-            );
+                            },
+                        )),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(6.0))
+                        .rounded_full()
+                        .bg(p.track)
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(bar_fill))
+                                .rounded_full()
+                                .bg(bar_color),
+                        ),
+                );
 
         let bottom = div()
             .flex_none()

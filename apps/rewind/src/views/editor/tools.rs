@@ -462,7 +462,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         let Some(picture) = self.picture else {
             self.stage_drag = Some(StageDrag::Press);
             return;
@@ -596,7 +596,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         let Some(row) = self.lane_row_of(event.position.y) else {
             return;
         };

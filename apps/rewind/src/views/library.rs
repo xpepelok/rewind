@@ -692,7 +692,7 @@ impl Overlay {
                     .collect::<Vec<_>>()
             }),
         )
-        .track_scroll(self.picking.list.clone())
+        .track_scroll(&self.picking.list)
         .size_full();
         let list = div()
             .id("gallery-pick")
@@ -1187,9 +1187,9 @@ impl Overlay {
                     .when(supported && !signing_in, |button| {
                         button.on_click(cx.listener(|overlay, _, window, cx| {
                             let placement = crate::views::overlay::sign_in_placement(window);
-                            overlay.state.update(cx, |rewind, cx| {
-                                rewind.add_youtube_account(placement, cx)
-                            })
+                            overlay
+                                .state
+                                .update(cx, |rewind, cx| rewind.add_youtube_account(placement, cx))
                         }))
                     }),
                 ),
@@ -1425,7 +1425,11 @@ impl Overlay {
         } else {
             "Rewind запущен без установки, поэтому обновление устанавливается вручную: откроется страница релизов на GitHub."
         };
-        let text = if installed { "Обновить" } else { "Открыть страницу релизов" };
+        let text = if installed {
+            "Обновить"
+        } else {
+            "Открыть страницу релизов"
+        };
         div()
             .id("update-scroll")
             .flex_1()
@@ -1473,10 +1477,7 @@ impl Overlay {
                                     _ => None,
                                 },
                                 |block, error| {
-                                    block.child(hint(
-                                        format!("Не удалось обновить: {error}"),
-                                        &p,
-                                    ))
+                                    block.child(hint(format!("Не удалось обновить: {error}"), &p))
                                 },
                             )
                             .child(

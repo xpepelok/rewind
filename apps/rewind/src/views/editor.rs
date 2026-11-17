@@ -15,10 +15,10 @@ use image::{Frame as ImageFrame, RgbaImage};
 use smallvec::smallvec;
 use youtube::{Privacy, PublishSettings};
 
+use parking_lot::Mutex;
 use rewind_media::{
     Edit, MediaInfo, Player, PlayerState, Span, audio_tracks, export, export_in_place, probe,
 };
-use parking_lot::Mutex;
 
 mod tools;
 
@@ -293,7 +293,7 @@ impl Editor {
             _subscription: subscription,
         };
         editor.load(window, cx);
-        window.focus(&editor.focus);
+        window.focus(&editor.focus, cx);
         editor
     }
 

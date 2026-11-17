@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gpui::{
     Bounds, Context, CursorStyle, Entity, FocusHandle, Focusable, Hsla, Modifiers, Pixels, Point,
-    RenderImage, ScrollWheelEvent, Subscription, Window, point, prelude::*, px, size,
+    RenderImage, ScrollEvent, Subscription, Window, point, prelude::*, px, size,
 };
 use image::{Frame as ImageFrame, RgbaImage};
 use smallvec::smallvec;
@@ -995,7 +995,7 @@ impl Board {
         let handle = self.text.focus_handle(cx);
         window.prevent_default();
         cx.stop_propagation();
-        cx.defer_in(window, move |_, window, _| window.focus(&handle));
+        cx.defer_in(window, move |_, window, cx| window.focus(&handle, cx));
         cx.notify();
     }
 
@@ -1031,7 +1031,7 @@ impl Board {
             (None, None) => {}
         }
         self.text.update(cx, |input, cx| input.set_text("", cx));
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -1042,7 +1042,7 @@ impl Board {
             self.marks.insert(index.min(self.marks.len()), old);
         }
         self.text.update(cx, |input, cx| input.set_text("", cx));
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -1367,7 +1367,7 @@ impl Board {
         cx.notify();
     }
 
-    pub fn wheel<T: 'static>(&mut self, event: &ScrollWheelEvent, cx: &mut Context<T>) {
+    pub fn wheel<T: 'static>(&mut self, event: &ScrollEvent, cx: &mut Context<T>) {
         let delta = f32::from(event.delta.pixel_delta(px(20.0)).y);
         if delta == 0.0 {
             return;

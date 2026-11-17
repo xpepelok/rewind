@@ -4,8 +4,7 @@ use std::sync::Arc;
 use gpui::{
     AnyElement, App, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, Pixels, Point, Render,
-    RenderImage, ScrollWheelEvent, Subscription, Window, anchored, deferred, div, img, prelude::*,
-    px,
+    RenderImage, ScrollEvent, Subscription, Window, anchored, deferred, div, img, prelude::*, px,
 };
 use image::{ImageFormat, RgbaImage};
 
@@ -19,9 +18,7 @@ use crate::theme::{
     ThemeExt,
 };
 use crate::ui::{ButtonKind, button, strong};
-use crate::views::annotate::{
-    self, Annotate, Board, Tool, compose, render_image, separator,
-};
+use crate::views::annotate::{self, Annotate, Board, Tool, compose, render_image, separator};
 
 const MENU_WIDTH: f32 = 220.0;
 const MENU_ITEM: f32 = 36.0;
@@ -114,7 +111,7 @@ impl Picture {
             _subscriptions: subscriptions,
         };
         picture.load(window, cx);
-        window.focus(&picture.focus);
+        window.focus(&picture.focus, cx);
         picture
     }
 
@@ -297,7 +294,7 @@ impl Picture {
         self.board.discard_typing();
         self.board.reset();
         self.editing = false;
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -305,7 +302,7 @@ impl Picture {
         self.menu = None;
         self.board.palette = None;
         if !self.editing {
-            window.focus(&self.focus);
+            window.focus(&self.focus, cx);
             return;
         }
         self.board
@@ -322,7 +319,7 @@ impl Picture {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         if self.editing {
             self.board.commit_text(window, cx);
             self.board.palette = Some(event.position);
@@ -333,7 +330,7 @@ impl Picture {
         cx.notify();
     }
 
-    fn on_wheel(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_wheel(&mut self, event: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
         if !self.editing {
             return;
         }
@@ -683,7 +680,9 @@ impl Render for Picture {
         let cropping = self.editing && self.board.tool == Tool::Crop;
         let layer = annotate::overlay(&self.board, cropping, p, cx);
         let texts = annotate::texts(&self.board);
-        let handles = self.editing.then(|| annotate::crop_handles(&self.board, &p));
+        let handles = self
+            .editing
+            .then(|| annotate::crop_handles(&self.board, &p));
         let typing = annotate::typing_field(&self.board, &p);
         let menu = self.menu_layer(cx);
         let palette = annotate::palette_popover(&self.board, "picture-palette", Vec::new(), cx);
@@ -756,7 +755,7 @@ impl Render for Picture {
                             }
                         }),
                     )
-                    .on_scroll_wheel(cx.listener(Self::on_wheel)),
+                    .on_scroll(cx.listener(Self::on_wheel)),
             )
             .children(menu)
             .children(palette)

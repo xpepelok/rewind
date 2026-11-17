@@ -242,9 +242,9 @@ impl Palette {
             offset: point(px(0.0), px(6.0)),
             blur_radius: px(18.0),
             spread_radius: px(0.0),
+            inset: false,
         }]
     }
-
 }
 
 pub struct ActivePalette(pub Palette);

@@ -202,7 +202,10 @@ mod tests {
         )
         .expect("release");
         assert_eq!(release.version, "0.2.0");
-        assert_eq!(release.asset, "/xpepelok/rewind/releases/download/v0.2.0/Rewind.exe");
+        assert_eq!(
+            release.asset,
+            "/xpepelok/rewind/releases/download/v0.2.0/Rewind.exe"
+        );
 
         let foreign = r#"{"tag_name":"v9.0.0","assets":[
             {"name":"Rewind.exe","browser_download_url":"https://example.com/Rewind.exe"},

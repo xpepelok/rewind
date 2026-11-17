@@ -96,13 +96,22 @@ icons! {
 
 const SHOT_FILES: &[(&str, &[u8])] = &[
     ("shots/home.png", include_bytes!("../assets/shots/home.png")),
-    ("shots/filters.png", include_bytes!("../assets/shots/filters.png")),
-    ("shots/photo.png", include_bytes!("../assets/shots/photo.png")),
+    (
+        "shots/filters.png",
+        include_bytes!("../assets/shots/filters.png"),
+    ),
+    (
+        "shots/photo.png",
+        include_bytes!("../assets/shots/photo.png"),
+    ),
     (
         "shots/highlights.png",
         include_bytes!("../assets/shots/highlights.png"),
     ),
-    ("shots/settings.png", include_bytes!("../assets/shots/settings.png")),
+    (
+        "shots/settings.png",
+        include_bytes!("../assets/shots/settings.png"),
+    ),
     (
         "shots/appearance.png",
         include_bytes!("../assets/shots/appearance.png"),

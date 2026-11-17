@@ -473,9 +473,9 @@ impl Overlay {
                         .w_full()
                         .on_click(cx.listener(
                             move |overlay, _, window, cx| {
-                                overlay.state.update(cx, |rewind, cx| {
-                                    rewind.forget_published(&forget, cx)
-                                });
+                                overlay
+                                    .state
+                                    .update(cx, |rewind, cx| rewind.forget_published(&forget, cx));
                                 overlay.go_back(window, cx);
                             },
                         )),

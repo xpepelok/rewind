@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gpui::{
     App, Bounds, Context, CursorStyle, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, ObjectFit, Render, RenderImage, ScrollWheelEvent, Window,
+    MouseMoveEvent, ObjectFit, Render, RenderImage, ScrollEvent, Window,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, img, prelude::*, px,
 };
 
@@ -75,15 +75,13 @@ pub fn open(width: u32, height: u32, bgra: Vec<u8>, at: (i32, i32), scale: f32, 
     );
     let accent_rgb = {
         let rgba = gpui::Rgba::from(accent);
-        ((rgba.r * 255.0) as u32) << 16
-            | ((rgba.g * 255.0) as u32) << 8
-            | (rgba.b * 255.0) as u32
+        ((rgba.r * 255.0) as u32) << 16 | ((rgba.g * 255.0) as u32) << 8 | (rgba.b * 255.0) as u32
     };
     cx.open_window(options(bounds), |window, cx| {
         window::pin(window, extent, accent_rgb, cx);
         cx.new(|cx| {
             let focus = cx.focus_handle();
-            window.focus(&focus);
+            window.focus(&focus, cx);
             Pin {
                 image: Some(image),
                 bytes: bgra,
@@ -153,12 +151,16 @@ impl Pin {
         window::place_pinned(window, dragged(origin, from, to), _cx);
     }
 
-    fn on_wheel(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_wheel(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
         let delta = f32::from(event.delta.pixel_delta(px(20.0)).y);
         if delta == 0.0 || self.drag.is_some() || self.menu.is_some() {
             return;
         }
-        let factor = if delta > 0.0 { ZOOM_STEP } else { 1.0 / ZOOM_STEP };
+        let factor = if delta > 0.0 {
+            ZOOM_STEP
+        } else {
+            1.0 / ZOOM_STEP
+        };
         self.zoom = (self.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
         let Some(current) = window::extent(window) else {
             return;
@@ -186,7 +188,12 @@ impl Pin {
         }
     }
 
-    fn context_menu(&self, at: (f32, f32), window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn context_menu(
+        &self,
+        at: (f32, f32),
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let p = cx.palette();
         let viewport = window.viewport_size();
         let height = MENU_ITEM * 2.0 + MENU_PAD * 2.0;
@@ -252,8 +259,11 @@ impl Render for Pin {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right))
             .on_mouse_move(cx.listener(Self::on_move))
-            .on_mouse_up(MouseButton::Left, cx.listener(|pin, _, _, _| pin.drag = None))
-            .on_scroll_wheel(cx.listener(Self::on_wheel))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|pin, _, _, _| pin.drag = None),
+            )
+            .on_scroll(cx.listener(Self::on_wheel))
             .when_some(self.image.clone(), |pin, image| {
                 pin.child(img(image).size_full().object_fit(ObjectFit::Fill))
             })
@@ -283,7 +293,10 @@ mod tests {
         };
         let moved = dragged(origin, (10, 10), (-30, 25));
         assert_eq!((moved.left, moved.top), (60, 65));
-        assert_eq!((moved.right - moved.left, moved.bottom - moved.top), (300, 200));
+        assert_eq!(
+            (moved.right - moved.left, moved.bottom - moved.top),
+            (300, 200)
+        );
     }
 
     #[test]

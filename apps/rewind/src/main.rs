@@ -19,8 +19,8 @@ mod watchdog;
 use futures::StreamExt;
 use futures::channel::mpsc::unbounded;
 use gpui::{
-    App, AppContext, Application, Bounds, Pixels, TitlebarOptions, WindowBackgroundAppearance,
-    WindowBounds, WindowKind, WindowOptions, px, size,
+    App, AppContext, Bounds, Pixels, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
+    WindowKind, WindowOptions, px, size,
 };
 
 use rewind_config::{Paths, Theme};
@@ -45,14 +45,14 @@ fn wants_overlay() -> bool {
 }
 
 fn wants_installer() -> bool {
-    let flagged = std::env::args().skip(1).any(|arg| {
-        arg == SHOW_FLAG || arg == system::NVIDIA_FLAG || arg == system::ELEVATED_FLAG
-    });
+    let flagged = std::env::args()
+        .skip(1)
+        .any(|arg| arg == SHOW_FLAG || arg == system::NVIDIA_FLAG || arg == system::ELEVATED_FLAG);
     !flagged && !system::running_installed_copy()
 }
 
 fn run_installer() {
-    Application::new()
+    gpui_platform::application()
         .with_assets(Assets)
         .run(|cx: &mut App| {
             theme::install(cx);
@@ -82,7 +82,7 @@ fn run_installer() {
                 cx.quit();
                 return;
             }
-            cx.on_window_closed(|cx| cx.quit()).detach();
+            cx.on_window_closed(|cx, _| cx.quit()).detach();
             cx.activate(true);
         });
 }
@@ -160,7 +160,7 @@ fn main() -> anyhow::Result<()> {
     let (signals, mut receiver) = unbounded::<Signal>();
     instance.listen(signals.clone());
 
-    Application::new()
+    gpui_platform::application()
         .with_assets(Assets)
         .run(move |cx: &mut App| {
             theme::install(cx);
@@ -199,11 +199,8 @@ fn main() -> anyhow::Result<()> {
                 let _instance = instance;
                 while let Some(signal) = receiver.next().await {
                     let quit = matches!(signal, Signal::Quit);
-                    if pump
-                        .update(cx, |rewind, cx| rewind.handle(signal, cx))
-                        .is_err()
-                        || quit
-                    {
+                    pump.update(cx, |rewind, cx| rewind.handle(signal, cx));
+                    if quit {
                         break;
                     }
                 }
