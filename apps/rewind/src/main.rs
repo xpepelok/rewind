@@ -37,6 +37,20 @@ use crate::views::overlay::Overlay;
 const APP_ID: &str = "Rewind";
 const SHOW_FLAG: &str = "--show";
 const FAILURE_CODE: i32 = 1;
+const CRASH_LOG: &str = "crash.log";
+
+fn crash_line(report: &str) -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let report = report.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("{version} {report}")
+}
+
+fn log_crashes() {
+    let logs = Paths::resolve().logs();
+    std::panic::set_hook(Box::new(move |info| {
+        watchdog::log_to(&logs, CRASH_LOG, &crash_line(&info.to_string()));
+    }));
+}
 
 fn wants_overlay() -> bool {
     std::env::args()
@@ -157,6 +171,7 @@ fn main() -> anyhow::Result<()> {
         Instance::signal_running();
         return Ok(());
     };
+    log_crashes();
     let (signals, mut receiver) = unbounded::<Signal>();
     instance.listen(signals.clone());
 
@@ -212,4 +227,21 @@ fn main() -> anyhow::Result<()> {
             }
         });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_crash_report_is_one_line_with_the_version() {
+        let line = crash_line("panicked at src/main.rs:1:2:\n  something\tbroke");
+        assert_eq!(
+            line,
+            format!(
+                "{} panicked at src/main.rs:1:2: something broke",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+    }
 }

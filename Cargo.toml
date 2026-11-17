@@ -24,8 +24,8 @@ rewind-media = { path = "crates/media" }
 rewind-nvbus = { path = "crates/nvbus" }
 anyhow = "1"
 futures = { version = "0.3", default-features = false, features = ["std", "alloc", "async-await", "executor"] }
-gpui = { git = "https://github.com/xpepelok/zed", rev = "ea4c69cfbbf2643428d5ac8496cc30f717259da2" }
-gpui_platform = { git = "https://github.com/xpepelok/zed", rev = "ea4c69cfbbf2643428d5ac8496cc30f717259da2" }
+gpui = { git = "https://github.com/xpepelok/zed", rev = "3534bddace483da0fa2509ec7c303f0039b28a3e" }
+gpui_platform = { git = "https://github.com/xpepelok/zed", rev = "3534bddace483da0fa2509ec7c303f0039b28a3e" }
 parking_lot = "0.12"
 raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
