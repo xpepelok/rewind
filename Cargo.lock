@@ -2376,6 +2376,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
+source = "git+https://github.com/xpepelok/gpui?rev=51ea45ba0ecf9091d1823959d73fff178b0e6a1f#51ea45ba0ecf9091d1823959d73fff178b0e6a1f"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",

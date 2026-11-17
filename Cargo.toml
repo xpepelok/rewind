@@ -1,6 +1,5 @@
 [workspace]
 resolver = "3"
-exclude = ["vendor"]
 members = [
     "apps/rewind",
     "crates/capture",
@@ -50,4 +49,4 @@ panic = "abort"
 strip = true
 
 [patch.crates-io]
-gpui = { path = "vendor/gpui" }
+gpui = { git = "https://github.com/xpepelok/gpui", rev = "51ea45ba0ecf9091d1823959d73fff178b0e6a1f" }
