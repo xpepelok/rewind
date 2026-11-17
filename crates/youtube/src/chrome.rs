@@ -124,6 +124,7 @@ fn arguments(profile: &Path, headless: bool, open_at: &str) -> Vec<String> {
         "--disable-popup-blocking".to_string(),
         "--window-size=1280,900".to_string(),
         "--disable-blink-features=AutomationControlled".to_string(),
+        "--do-not-de-elevate".to_string(),
     ];
     if headless {
         arguments.push("--headless=new".to_string());

@@ -492,6 +492,7 @@ pub fn install() -> io::Result<()> {
             &format!("{launch} {NVIDIA_FLAG}"),
         )?;
     }
+    stop_nvidia_leftovers();
     register_logon_task(&target)?;
     delete_value(HKEY_CURRENT_USER, RUN_KEY, APP_NAME);
     set_string(HKEY_LOCAL_MACHINE, UNINSTALL_KEY, "DisplayName", APP_NAME)?;
@@ -520,6 +521,77 @@ pub fn install() -> io::Result<()> {
 }
 
 const EXIT_WAIT_MS: u32 = 5000;
+const LEFTOVER_WAIT_MS: u32 = 2000;
+const NVIDIA_CONTAINER: &str = "nvcontainer.exe";
+const NVIDIA_LEFTOVERS: [&str; 6] = [
+    "NVIDIA Overlay.exe",
+    "NVIDIA App.exe",
+    "NVIDIA Share.exe",
+    "NVIDIA Web Helper.exe",
+    "nvsphelper64.exe",
+    NVIDIA_CONTAINER,
+];
+
+fn nvidia_leftover(name: &str, started_by_rewind: bool) -> bool {
+    let container = name.eq_ignore_ascii_case(NVIDIA_CONTAINER);
+    NVIDIA_LEFTOVERS
+        .iter()
+        .any(|leftover| name.eq_ignore_ascii_case(leftover))
+        && !(container && started_by_rewind)
+}
+
+fn stop_nvidia_leftovers() {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess,
+        WaitForSingleObject,
+    };
+
+    let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
+        return;
+    };
+    let mut entry = PROCESSENTRY32W {
+        dwSize: size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut processes = Vec::new();
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok();
+    while more {
+        let length = entry
+            .szExeFile
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(entry.szExeFile.len());
+        processes.push((
+            entry.th32ProcessID,
+            entry.th32ParentProcessID,
+            String::from_utf16_lossy(&entry.szExeFile[..length]),
+        ));
+        more = unsafe { Process32NextW(snapshot, &mut entry) }.is_ok();
+    }
+    let _ = unsafe { CloseHandle(snapshot) };
+
+    let ours: Vec<u32> = processes
+        .iter()
+        .filter(|(_, _, name)| name.eq_ignore_ascii_case(EXE_NAME))
+        .map(|(pid, _, _)| *pid)
+        .collect();
+    for (pid, parent, name) in &processes {
+        if *pid == 0 || !nvidia_leftover(name, ours.contains(parent)) {
+            continue;
+        }
+        if let Ok(handle) =
+            unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, *pid) }
+        {
+            let _ = unsafe { TerminateProcess(handle, 1) };
+            let _ = unsafe { WaitForSingleObject(handle, LEFTOVER_WAIT_MS) };
+            let _ = unsafe { CloseHandle(handle) };
+        }
+    }
+}
 
 fn installed_image(image: &Path, directory: &Path) -> bool {
     let same_folder = image.parent().is_some_and(|parent| {
@@ -754,6 +826,19 @@ mod tests {
         assert_eq!(xml.matches("<UserId>PC\\R&amp;D</UserId>").count(), 2);
         assert!(xml.contains("<Command>C:\\Program Files\\Rewind\\Rewind.exe</Command>"));
         assert!(xml.contains("<WorkingDirectory>C:\\Program Files\\Rewind</WorkingDirectory>"));
+    }
+
+    #[test]
+    fn only_the_overlay_stack_is_stopped_and_our_own_container_is_spared() {
+        assert!(nvidia_leftover("NVIDIA Overlay.exe", false));
+        assert!(nvidia_leftover("nvidia app.EXE", false));
+        assert!(nvidia_leftover("nvsphelper64.exe", false));
+        assert!(nvidia_leftover("nvcontainer.exe", false));
+        assert!(!nvidia_leftover("nvcontainer.exe", true));
+        assert!(nvidia_leftover("NVIDIA Overlay.exe", true));
+        assert!(!nvidia_leftover("NVDisplay.Container.exe", false));
+        assert!(!nvidia_leftover("NVIDIA Broadcast.exe", false));
+        assert!(!nvidia_leftover("Rewind.exe", false));
     }
 
     #[test]
