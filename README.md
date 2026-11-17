@@ -13,7 +13,7 @@ Rewind постоянно хранит последние минуты игры.
 <img src="https://img.shields.io/badge/платформа-Windows%2010%2F11-76B900?style=flat-square" alt="платформа">
 <img src="https://img.shields.io/badge/на-Rust-76B900?style=flat-square" alt="Rust">
 <img src="https://img.shields.io/badge/интерфейс-gpui-76B900?style=flat-square" alt="gpui">
-<a href="LICENSE"><img src="https://img.shields.io/badge/лицензия-MIT-444?style=flat-square" alt="MIT"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/лицензия-PolyForm_Noncommercial-444?style=flat-square" alt="PolyForm Noncommercial 1.0.0"></a>
 
 </div>
 
@@ -57,7 +57,7 @@ Rewind решает ту же основную задачу — постоянн
 | Темы / внешний вид | ❌ один фиксированный UI | ✅ четыре темы ручной работы |
 | Встроенный редактор клипов и снимков | ⚠️ минимальный | ✅ обрезка, глушение дорожек, захват кадра |
 | Загрузка на YouTube в один клик | ⚠️ много возни со входом | ✅ прямо из уведомления о сохранении |
-| Открытый исходный код | ❌ | ✅ MIT |
+| Открытый исходный код | ❌ | ✅ для некоммерческого использования |
 | След установки | NVIDIA App + веб-сервисы | один нативный исполняемый файл |
 | Потребление памяти | ~1,25 ГБ резидентно, 16 процессов¹ | **~43 МБ, один процесс**¹ |
 
@@ -172,7 +172,7 @@ cargo build --release -p rewind
 
 ## Лицензия
 
-Проект распространяется по лицензии [MIT](LICENSE).
+Проект распространяется по лицензии [PolyForm Noncommercial 1.0.0](LICENSE): программу и её исходный код можно свободно использовать, изменять и распространять в некоммерческих целях. Коммерческое использование запрещено.
 
 ## Благодарности
 
