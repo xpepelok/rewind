@@ -14,7 +14,7 @@ use windows::core::{GUID, HSTRING};
 use crate::error::{MediaError, Result};
 use crate::probe::{duration, open_reader};
 use crate::span::Span;
-use crate::trim::writer_attributes;
+use crate::trim::{shift, writer_attributes};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VideoFormat {
@@ -346,10 +346,8 @@ fn append(
         };
         let shifted = offset + time;
         let length = unsafe { sample.GetSampleDuration() }.unwrap_or(0);
-        unsafe {
-            sample.SetSampleTime(shifted)?;
-            writer.WriteSample(output, &sample)?;
-        }
+        shift(&sample, time, offset)?;
+        unsafe { writer.WriteSample(output, &sample) }?;
         end = end.max(shifted + length);
         progress.advance(shifted + length);
     }

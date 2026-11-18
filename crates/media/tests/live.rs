@@ -10,6 +10,7 @@ use rewind_media::{
 };
 
 const SAMPLES: &str = "REWIND_SAMPLES";
+const KEY_INTERVAL: Duration = Duration::from_millis(1100);
 
 fn samples() -> Vec<PathBuf> {
     let directory =
@@ -46,6 +47,15 @@ fn trims_every_sample_losslessly() {
             trimmed.duration <= Duration::from_millis(2600),
             "{trimmed:?}"
         );
+
+        let late = Span {
+            start: Duration::from_millis(1500),
+            end: Duration::from_millis(2500),
+        };
+        let shorter = temp.path().join("late.mp4");
+        trim(&sample, late, &shorter).unwrap();
+        let shorter = probe(&shorter).unwrap().duration;
+        assert!(shorter <= late.length() + KEY_INTERVAL, "{shorter:?}");
 
         let copy = temp.path().join("in-place.mp4");
         std::fs::copy(&sample, &copy).unwrap();

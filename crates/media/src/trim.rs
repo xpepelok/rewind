@@ -3,10 +3,11 @@ use std::thread;
 use std::time::Duration;
 
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFMediaType, MF_MT_MAJOR_TYPE, MF_SINK_WRITER_DISABLE_THROTTLING,
+    IMFAttributes, IMFMediaType, IMFSample, MF_MT_MAJOR_TYPE, MF_SINK_WRITER_DISABLE_THROTTLING,
     MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_ANY_STREAM, MF_SOURCE_READERF_ENDOFSTREAM,
     MF_TRANSCODE_CONTAINERTYPE, MFCreateAttributes, MFCreateSinkWriterFromURL, MFMediaType_Video,
-    MFSampleExtension_CleanPoint, MFTranscodeContainerType_MPEG4,
+    MFSampleExtension_CleanPoint, MFSampleExtension_DecodeTimestamp,
+    MFTranscodeContainerType_MPEG4,
 };
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::core::{GUID, HSTRING};
@@ -34,6 +35,15 @@ pub(crate) fn writer_attributes() -> Result<IMFAttributes> {
         attributes.SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_MPEG4)?;
     }
     Ok(attributes)
+}
+
+pub(crate) fn shift(sample: &IMFSample, time: i64, by: i64) -> Result<()> {
+    unsafe { sample.SetSampleTime(time + by) }?;
+    if let Ok(decode) = unsafe { sample.GetUINT64(&MFSampleExtension_DecodeTimestamp) } {
+        let moved = (decode as i64).saturating_add(by);
+        unsafe { sample.SetUINT64(&MFSampleExtension_DecodeTimestamp, moved as u64) }?;
+    }
+    Ok(())
 }
 
 fn is_video(media_type: &IMFMediaType) -> bool {
@@ -112,10 +122,8 @@ pub fn trim(source: &Path, span: Span, destination: &Path) -> Result<()> {
         if time < base {
             continue;
         }
-        unsafe {
-            sample.SetSampleTime(time - base)?;
-            writer.WriteSample(stream.output, &sample)?;
-        }
+        shift(&sample, time, -base)?;
+        unsafe { writer.WriteSample(stream.output, &sample) }?;
     }
     unsafe { writer.Finalize() }?;
     Ok(())
