@@ -13,7 +13,7 @@ use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::core::{GUID, HSTRING};
 
 use crate::error::{MediaError, Result};
-use crate::probe::open_reader;
+use crate::probe::{open_reader, tracks};
 use crate::span::Span;
 
 const TEMP_SUFFIX: &str = "trim.tmp";
@@ -63,11 +63,8 @@ pub fn trim(source: &Path, span: Span, destination: &Path) -> Result<()> {
             &writer_attributes()?,
         )
     }?;
-    let mut streams = Vec::with_capacity(3);
-    for index in 0.. {
-        let Ok(native) = (unsafe { reader.GetNativeMediaType(index, 0) }) else {
-            break;
-        };
+    let mut streams = Vec::with_capacity(4);
+    for (_, native) in tracks(&reader) {
         let output = unsafe { writer.AddStream(&native) }?;
         unsafe { writer.SetInputMediaType(output, &native, None) }?;
         streams.push(Stream {
@@ -76,6 +73,7 @@ pub fn trim(source: &Path, span: Span, destination: &Path) -> Result<()> {
             done: false,
         });
     }
+    streams.reverse();
     if !streams.iter().any(|stream| stream.video) {
         return Err(MediaError::NoVideo);
     }

@@ -2,8 +2,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use windows::Win32::Media::MediaFoundation::{
-    IMFSourceReader, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_PD_DURATION,
-    MF_SOURCE_READER_MEDIASOURCE, MFCreateSourceReaderFromURL, MFMediaType_Video,
+    IMFMediaType, IMFSourceReader, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
+    MF_PD_DURATION, MF_SOURCE_READER_MEDIASOURCE, MFCreateSourceReaderFromURL, MFMediaType_Video,
     MFVideoFormat_H264, MFVideoFormat_HEVC,
 };
 use windows::core::HSTRING;
@@ -27,6 +27,18 @@ pub struct MediaInfo {
 
 pub(crate) fn open_reader(path: &Path) -> Result<IMFSourceReader> {
     Ok(unsafe { MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), None) }?)
+}
+
+pub(crate) fn tracks(reader: &IMFSourceReader) -> Vec<(u32, IMFMediaType)> {
+    let mut tracks: Vec<_> = (0..)
+        .map_while(|index| {
+            unsafe { reader.GetNativeMediaType(index, 0) }
+                .ok()
+                .map(|media_type| (index, media_type))
+        })
+        .collect();
+    tracks.reverse();
+    tracks
 }
 
 pub(crate) fn duration(reader: &IMFSourceReader) -> Result<Duration> {

@@ -491,13 +491,13 @@ pub enum QuickShare {
     Telegram,
 }
 
-cycle!(QuickShare { Discord => "Discord · 10 МБ", DiscordNitro => "Discord Nitro · 500 МБ", Telegram => "Telegram · 2 ГБ" });
+cycle!(QuickShare { Discord => "Discord · 20 МБ", DiscordNitro => "Discord Nitro · 1 ГБ", Telegram => "Telegram · 2 ГБ" });
 
 impl QuickShare {
     pub const fn limit_bytes(self) -> u64 {
         match self {
-            Self::Discord => 10_000_000,
-            Self::DiscordNitro => 500_000_000,
+            Self::Discord => 20_000_000,
+            Self::DiscordNitro => 1_000_000_000,
             Self::Telegram => 2_000_000_000,
         }
     }

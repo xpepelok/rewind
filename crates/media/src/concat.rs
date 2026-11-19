@@ -12,7 +12,7 @@ use windows::Win32::Media::MediaFoundation::{
 use windows::core::{GUID, HSTRING};
 
 use crate::error::{MediaError, Result};
-use crate::probe::{duration, open_reader};
+use crate::probe::{duration, open_reader, tracks};
 use crate::span::Span;
 use crate::trim::{shift, writer_attributes};
 
@@ -209,10 +209,7 @@ fn inspect(path: &Path) -> Result<Clip> {
     unsafe { reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false) }?;
     let mut streams = Vec::new();
     let mut layout = Layout::default();
-    for index in 0.. {
-        let Ok(native) = (unsafe { reader.GetNativeMediaType(index, 0) }) else {
-            break;
-        };
+    for (index, native) in tracks(&reader) {
         let Ok(major) = (unsafe { native.GetGUID(&MF_MT_MAJOR_TYPE) }) else {
             continue;
         };

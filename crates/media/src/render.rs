@@ -22,6 +22,7 @@ use crate::edit::{Edit, PixelRect, Stroke};
 use crate::effects::{Coverage, Image, Plane, blur, paint_mask, scale_into, stroke_mask};
 use crate::error::{MediaError, Result};
 use crate::mixdown::{CHANNELS, mixdown, resample, to_stereo};
+use crate::probe::tracks;
 use crate::span::Span;
 use crate::stretch::stretch;
 use crate::trim::{replace, temp_path, trim};
@@ -55,12 +56,8 @@ fn reader(path: &Path) -> Result<IMFSourceReader> {
 }
 
 fn streams_of(reader: &IMFSourceReader, major: GUID) -> Vec<u32> {
-    (0..)
-        .map_while(|index| {
-            unsafe { reader.GetNativeMediaType(index, 0) }
-                .ok()
-                .map(|media_type| (index, media_type))
-        })
+    tracks(reader)
+        .into_iter()
         .filter(|(_, media_type)| {
             unsafe { media_type.GetGUID(&MF_MT_MAJOR_TYPE) }.is_ok_and(|value| value == major)
         })

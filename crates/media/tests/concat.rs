@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use rewind_media::{MediaError, Runtime, audio_tracks, concat, frames_at, probe};
+use rewind_media::{MediaError, Runtime, Span, audio_tracks, concat, frames_at, probe, trim};
 use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFMediaType, IMFSinkWriter, MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
     MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT, MF_MT_AUDIO_NUM_CHANNELS,
@@ -13,8 +13,9 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SINK_WRITER_DISABLE_THROTTLING,
     MF_TRANSCODE_CONTAINERTYPE, MFAudioFormat_AAC, MFAudioFormat_PCM, MFCreateAttributes,
     MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL,
-    MFMediaType_Audio, MFMediaType_Video, MFTranscodeContainerType_MPEG4, MFVideoFormat_H264,
-    MFVideoFormat_RGB32, MFVideoInterlace_Progressive,
+    MFCreateSourceReaderFromURL, MFMediaType_Audio, MFMediaType_Video,
+    MFTranscodeContainerType_MPEG4, MFVideoFormat_H264, MFVideoFormat_RGB32,
+    MFVideoInterlace_Progressive,
 };
 use windows::core::{GUID, HSTRING};
 
@@ -94,7 +95,7 @@ fn write(writer: &IMFSinkWriter, stream: u32, bytes: &[u8], time: i64, duration:
     }
 }
 
-fn make_clip(path: &Path, width: u32, height: u32, frames: u32) {
+fn make_clip(path: &Path, width: u32, height: u32, frames: u32, audio: &[u32]) {
     unsafe {
         let mut attributes: Option<IMFAttributes> = None;
         MFCreateAttributes(&mut attributes, 3).unwrap();
@@ -116,16 +117,22 @@ fn make_clip(path: &Path, width: u32, height: u32, frames: u32) {
         let input = video_type(&MFVideoFormat_RGB32, width, height);
         input.SetUINT32(&MF_MT_DEFAULT_STRIDE, width * 4).unwrap();
         writer.SetInputMediaType(video, &input, None).unwrap();
-        let audio = writer
-            .AddStream(&audio_type(&MFAudioFormat_AAC, 24_000))
-            .unwrap();
-        writer
-            .SetInputMediaType(
-                audio,
-                &audio_type(&MFAudioFormat_PCM, RATE * CHANNELS * 2),
-                None,
-            )
-            .unwrap();
+        let audio: Vec<u32> = audio
+            .iter()
+            .map(|rate| {
+                let track = writer
+                    .AddStream(&audio_type(&MFAudioFormat_AAC, *rate))
+                    .unwrap();
+                writer
+                    .SetInputMediaType(
+                        track,
+                        &audio_type(&MFAudioFormat_PCM, RATE * CHANNELS * 2),
+                        None,
+                    )
+                    .unwrap();
+                track
+            })
+            .collect();
         writer.BeginWriting().unwrap();
 
         let frame_hns = HNS / i64::from(FPS);
@@ -143,7 +150,9 @@ fn make_clip(path: &Path, width: u32, height: u32, frames: u32) {
                     value.to_le_bytes()
                 })
                 .collect();
-            write(&writer, audio, &pcm, time, frame_hns);
+            for track in &audio {
+                write(&writer, *track, &pcm, time, frame_hns);
+            }
         }
         writer.Finalize().unwrap();
     }
@@ -157,9 +166,9 @@ fn joins_clips_without_reencoding() {
     let first = temp.path().join("first.mp4");
     let second = temp.path().join("second.mp4");
     let other = temp.path().join("other.mp4");
-    make_clip(&first, 640, 360, 30);
-    make_clip(&second, 640, 360, 45);
-    make_clip(&other, 320, 240, 15);
+    make_clip(&first, 640, 360, 30, &[24_000]);
+    make_clip(&second, 640, 360, 45, &[24_000]);
+    make_clip(&other, 320, 240, 15, &[24_000]);
     let sources: Vec<PathBuf> = vec![first.clone(), second.clone()];
     let expected = probe(&first).unwrap().duration + probe(&second).unwrap().duration;
 
@@ -199,4 +208,38 @@ fn joins_clips_without_reencoding() {
         other => panic!("{other:?}"),
     }
     assert!(!temp.path().join("bad.mp4").exists());
+}
+
+fn audio_rates(path: &Path) -> Vec<u32> {
+    let reader =
+        unsafe { MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), None) }.unwrap();
+    (0..)
+        .map_while(|index| unsafe { reader.GetNativeMediaType(index, 0) }.ok())
+        .filter(|native| unsafe { native.GetGUID(&MF_MT_MAJOR_TYPE) }.unwrap() == MFMediaType_Audio)
+        .map(|native| unsafe { native.GetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND) }.unwrap())
+        .collect()
+}
+
+#[test]
+#[ignore = "needs media foundation encoder"]
+fn trimming_and_joining_keep_the_audio_tracks_in_their_order() {
+    let _runtime = Runtime::enter().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.mp4");
+    make_clip(&source, 640, 360, 60, &[12_000, 16_000, 24_000]);
+    let rates = audio_rates(&source);
+    assert_eq!(rates.len(), 3);
+    assert_ne!(rates[0], rates[2]);
+
+    let trimmed = temp.path().join("trimmed.mp4");
+    let span = Span {
+        start: Duration::ZERO,
+        end: Duration::from_secs(1),
+    };
+    trim(&source, span, &trimmed).unwrap();
+    assert_eq!(audio_rates(&trimmed), rates);
+
+    let joined = temp.path().join("joined.mp4");
+    concat(&[source, trimmed], &joined, &|_| {}).unwrap();
+    assert_eq!(audio_rates(&joined), rates);
 }
