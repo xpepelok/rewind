@@ -1034,7 +1034,8 @@ impl Rewind {
         action: crate::views::snip::SnipAction,
         cx: &mut Context<Self>,
     ) {
-        if matches!(action, crate::views::snip::SnipAction::Copy) {
+        let copied = matches!(action, crate::views::snip::SnipAction::Copy);
+        if copied && !self.settings.screenshots.saves_selection() {
             self.copy_snip(width, height, pixels, cx);
             return;
         }

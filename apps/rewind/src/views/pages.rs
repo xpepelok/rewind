@@ -209,7 +209,7 @@ impl Overlay {
                         .child(title_block(
                             "Копировать сразу после выделения",
                             Some(
-                                "Как «Ножницы» в Windows: отпустили кнопку мыши — снимок уже в буфере обмена. В галерею он не сохраняется."
+                                "Как «Ножницы» в Windows: отпустили кнопку мыши — снимок уже в буфере обмена. В галерею он попадает, только если включить настройку ниже."
                                     .to_owned(),
                             ),
                             &p,
@@ -220,6 +220,25 @@ impl Overlay {
                                     !settings.screenshots.copy_on_select
                             }),
                         )),
+                )
+                .child(
+                    setting_row(&p)
+                        .child(title_block(
+                            "Сохранять в галерею после выделения",
+                            Some(
+                                "Снимок остаётся в буфере обмена и вдобавок сохраняется в галерею. Работает вместе с копированием после выделения."
+                                    .to_owned(),
+                            ),
+                            &p,
+                        ))
+                        .child(
+                            Toggle::new("save-on-select", shots.saves_selection())
+                                .disabled(!shots.copy_on_select)
+                                .on_click(change(&state, |settings| {
+                                    settings.screenshots.save_on_select =
+                                        !settings.screenshots.save_on_select
+                                })),
+                        ),
                 )
             })
             .child(divider(&p))

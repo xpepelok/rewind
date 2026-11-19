@@ -660,6 +660,13 @@ impl Profiles {
 pub struct Screenshots {
     pub custom: bool,
     pub copy_on_select: bool,
+    pub save_on_select: bool,
+}
+
+impl Screenshots {
+    pub const fn saves_selection(&self) -> bool {
+        self.copy_on_select && self.save_on_select
+    }
 }
 
 pub const MARK_SPAN_MIN_SECONDS: u32 = 5;
@@ -712,6 +719,19 @@ pub struct Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_selection_is_saved_only_together_with_copying_it() {
+        let mut shots = Screenshots::default();
+        assert!(!shots.saves_selection());
+        shots.save_on_select = true;
+        assert!(!shots.saves_selection());
+        shots.copy_on_select = true;
+        assert!(shots.saves_selection());
+        let old: Screenshots =
+            serde_json::from_str(r#"{"custom":true,"copy_on_select":true}"#).unwrap();
+        assert!(!old.saves_selection());
+    }
 
     #[test]
     fn a_theme_this_build_does_not_know_falls_back_to_the_classic_one() {
