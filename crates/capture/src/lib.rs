@@ -44,7 +44,7 @@ pub use device::{Screen, screens};
 pub use encoder::hardware_encoder;
 #[cfg(windows)]
 pub use foreground::{
-    ProgramEvent, application_path, remember_application, running_programs, watch_exit,
+    ProgramEvent, application_path, remember_application, running_programs, set_games, watch_exit,
     watch_programs,
 };
 #[cfg(windows)]

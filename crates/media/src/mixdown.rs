@@ -24,16 +24,46 @@ pub fn mixdown(
     mix: &Mix,
     mutes: &[Window],
 ) -> Vec<f32> {
-    let length = tracks.iter().map(Vec::len).max().unwrap_or(0);
-    let gains: Vec<f32> = (0..tracks.len())
-        .map(|index| mix.track_gain(index))
+    let parts: Vec<(&[f32], f32)> = tracks
+        .iter()
+        .enumerate()
+        .map(|(index, track)| (track.as_slice(), mix.track_gain(index)))
         .collect();
+    blend(&parts, rate, origin, mutes)
+}
+
+pub fn separate(
+    tracks: &[Vec<f32>],
+    rate: u32,
+    origin: Duration,
+    mix: &Mix,
+    mutes: &[Window],
+) -> Vec<Vec<f32>> {
+    let length = tracks.iter().map(Vec::len).max().unwrap_or(0);
+    tracks
+        .iter()
+        .enumerate()
+        .map(|(index, track)| {
+            let part = [(track.as_slice(), mix.track_gain(index))];
+            let mut out = blend(&part, rate, origin, mutes);
+            out.resize(length, 0.0);
+            out
+        })
+        .collect()
+}
+
+fn blend(parts: &[(&[f32], f32)], rate: u32, origin: Duration, mutes: &[Window]) -> Vec<f32> {
+    let length = parts
+        .iter()
+        .map(|(track, _)| track.len())
+        .max()
+        .unwrap_or(0);
     let mut out = vec![0.0f32; length];
-    for (track, gain) in tracks.iter().zip(&gains) {
+    for (track, gain) in parts {
         if *gain == 0.0 {
             continue;
         }
-        for (sample, value) in out.iter_mut().zip(track) {
+        for (sample, value) in out.iter_mut().zip(*track) {
             *sample += value * gain;
         }
     }
@@ -102,6 +132,30 @@ mod tests {
         };
         let out = mixdown(&[game, mic], RATE, Duration::ZERO, &mix, &[]);
         assert!(out.iter().all(|sample| (*sample - 0.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn separate_tracks_keep_their_own_fader_and_share_the_mutes() {
+        let game = vec![0.5; 2 * RATE as usize];
+        let mic = vec![0.25; RATE as usize];
+        let mix = Mix {
+            game: 0.5,
+            mic: 2.0,
+            ..Mix::default()
+        };
+        let mutes = [Window {
+            start: Duration::from_millis(200),
+            end: Duration::from_millis(600),
+        }];
+        let out = separate(&[game, mic], RATE, Duration::ZERO, &mix, &mutes);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].len(), out[1].len());
+        assert_eq!(
+            (out[0][100 * CHANNELS], out[1][100 * CHANNELS]),
+            (0.25, 0.5)
+        );
+        assert_eq!((out[0][400 * CHANNELS], out[1][400 * CHANNELS]), (0.0, 0.0));
+        assert_eq!(out[1][800 * CHANNELS], 0.0);
     }
 
     #[test]

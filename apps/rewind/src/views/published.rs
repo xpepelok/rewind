@@ -377,15 +377,23 @@ impl Overlay {
                                 .id("published-thumbnail")
                                 .cursor_pointer()
                                 .child(label(thumbnail_label, p.accent))
-                                .on_click(cx.listener(|overlay, _, window, cx| {
-                                    let picked = rfd::FileDialog::new()
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    let picking = rfd::AsyncFileDialog::new()
                                         .add_filter("Картинка", &["png", "jpg", "jpeg"])
                                         .set_parent(window)
                                         .pick_file();
-                                    if picked.is_some() {
-                                        overlay.published_edit.thumbnail = picked;
-                                        cx.notify();
-                                    }
+                                    cx.spawn(async move |this, cx| {
+                                        let Some(file) = picking.await else {
+                                            return;
+                                        };
+                                        let file = file.path().to_path_buf();
+                                        this.update(cx, |overlay, cx| {
+                                            overlay.published_edit.thumbnail = Some(file);
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                    })
+                                    .detach();
                                 })),
                         ),
                 )

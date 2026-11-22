@@ -13,8 +13,7 @@ const SAMPLES: &str = "REWIND_SAMPLES";
 const KEY_INTERVAL: Duration = Duration::from_millis(1100);
 
 fn samples() -> Vec<PathBuf> {
-    let directory =
-        std::env::var_os(SAMPLES).expect("set REWIND_SAMPLES to a folder of mp4 clips");
+    let directory = std::env::var_os(SAMPLES).expect("set REWIND_SAMPLES to a folder of mp4 clips");
     std::fs::read_dir(directory)
         .unwrap()
         .flatten()
@@ -158,10 +157,12 @@ fn renders_every_effect_into_a_playable_clip() {
             "{:?}",
             rendered.duration
         );
-        assert_eq!(
-            audio_tracks(&destination).unwrap().min(1),
-            audio_tracks(&sample).unwrap().min(1)
-        );
+        let tracks = audio_tracks(&sample).unwrap();
+        assert_eq!(audio_tracks(&destination).unwrap(), tracks);
+        edit.merge_audio = true;
+        let merged = temp.path().join("merged.mp4");
+        export(&sample, &edit, &merged, &|_| {}).unwrap();
+        assert_eq!(audio_tracks(&merged).unwrap(), tracks.min(1));
         if let Some(keep) = std::env::var_os("REWIND_KEEP") {
             std::fs::copy(
                 &destination,

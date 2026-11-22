@@ -20,15 +20,17 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SA
 use windows::Win32::Graphics::Dxgi::DXGI_ERROR_WAS_STILL_DRAWING;
 use windows::Win32::Media::MediaFoundation::{
     CLSID_MFMediaEngineClassFactory, IMFAttributes, IMFMediaEngine, IMFMediaEngineClassFactory,
-    IMFMediaEngineNotify, IMFMediaEngineNotify_Impl, MF_MEDIA_ENGINE_CALLBACK,
-    MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_EVENT_ENDED, MF_MEDIA_ENGINE_EVENT_ERROR,
-    MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA, MF_MEDIA_ENGINE_EVENT_SEEKED,
-    MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MFCreateAttributes, MFCreateDXGIDeviceManager,
+    IMFMediaEngineEx, IMFMediaEngineNotify, IMFMediaEngineNotify_Impl, MF_MEDIA_ENGINE_AUDIOONLY,
+    MF_MEDIA_ENGINE_CALLBACK, MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_EVENT_ENDED,
+    MF_MEDIA_ENGINE_EVENT_ERROR, MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA,
+    MF_MEDIA_ENGINE_EVENT_SEEKED, MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_MT_MAJOR_TYPE,
+    MFCreateAttributes, MFCreateDXGIDeviceManager, MFMediaType_Audio,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::core::{BSTR, Interface, implement};
 
 use crate::error::{MediaError, Result};
+use crate::probe::{open_reader, tracks};
 use crate::runtime::Runtime;
 
 const TICK: Duration = Duration::from_millis(4);
@@ -36,6 +38,8 @@ const IDLE: Duration = Duration::from_millis(50);
 const HEARTBEAT: Duration = Duration::from_millis(100);
 const SEEK_EPSILON: f64 = 0.0005;
 const READBACK_DEPTH: usize = 3;
+const DRIFT: f64 = 0.08;
+const DRIFT_PAUSE: Duration = Duration::from_secs(2);
 
 pub struct Frame {
     pub width: u32,
@@ -68,6 +72,7 @@ enum Command {
     Seek(f64),
     Volume(f64),
     Muted(bool),
+    Tracks(Vec<f64>),
     Rate(f64),
     Resize((u32, u32)),
     Wake,
@@ -172,6 +177,10 @@ impl Player {
 
     pub fn set_muted(&self, muted: bool) {
         self.commands.send(Command::Muted(muted)).ok();
+    }
+
+    pub fn set_tracks(&self, gains: Vec<f64>) {
+        self.commands.send(Command::Tracks(gains)).ok();
     }
 
     pub fn set_rate(&self, rate: f64) {
@@ -400,12 +409,11 @@ impl Drop for Engine {
     }
 }
 
-fn engine(device: &ID3D11Device, flags: &Arc<Flags>, wake: Sender<Command>) -> Result<Engine> {
-    let mut token = 0u32;
-    let mut manager = None;
-    unsafe { MFCreateDXGIDeviceManager(&mut token, &mut manager) }?;
-    let manager = manager.ok_or(MediaError::NoVideo)?;
-    unsafe { manager.ResetDevice(device, token) }?;
+fn engine(
+    device: Option<&ID3D11Device>,
+    flags: &Arc<Flags>,
+    wake: Sender<Command>,
+) -> Result<Engine> {
     let notify: IMFMediaEngineNotify = Notify {
         flags: flags.clone(),
         wake,
@@ -416,15 +424,118 @@ fn engine(device: &ID3D11Device, flags: &Arc<Flags>, wake: Sender<Command>) -> R
     let attributes = attributes.ok_or(MediaError::NoVideo)?;
     unsafe {
         attributes.SetUnknown(&MF_MEDIA_ENGINE_CALLBACK, &notify)?;
-        attributes.SetUnknown(&MF_MEDIA_ENGINE_DXGI_MANAGER, &manager)?;
         attributes.SetUINT32(
             &MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
             DXGI_FORMAT_B8G8R8A8_UNORM.0 as u32,
         )?;
     }
+    let mut mode = MF_MEDIA_ENGINE_AUDIOONLY.0 as u32;
+    if let Some(device) = device {
+        let mut token = 0u32;
+        let mut manager = None;
+        unsafe { MFCreateDXGIDeviceManager(&mut token, &mut manager) }?;
+        let manager = manager.ok_or(MediaError::NoVideo)?;
+        unsafe { manager.ResetDevice(device, token) }?;
+        unsafe { attributes.SetUnknown(&MF_MEDIA_ENGINE_DXGI_MANAGER, &manager) }?;
+        mode = 0;
+    }
     let factory: IMFMediaEngineClassFactory =
         unsafe { CoCreateInstance(&CLSID_MFMediaEngineClassFactory, None, CLSCTX_INPROC_SERVER) }?;
-    Ok(Engine(unsafe { factory.CreateInstance(0, &attributes) }?))
+    Ok(Engine(unsafe {
+        factory.CreateInstance(mode, &attributes)
+    }?))
+}
+
+struct Voice {
+    engine: Engine,
+    flags: Arc<Flags>,
+    stream: u32,
+    ready: bool,
+    corrected: Instant,
+}
+
+impl Voice {
+    fn open(source: &BSTR, stream: u32, wake: Sender<Command>) -> Result<Self> {
+        let flags = Arc::new(Flags::default());
+        let engine = engine(None, &flags, wake)?;
+        unsafe { engine.SetSource(source) }?;
+        Ok(Self {
+            engine,
+            flags,
+            stream,
+            ready: false,
+            corrected: Instant::now(),
+        })
+    }
+
+    fn select(&self) -> Result<()> {
+        let engine: IMFMediaEngineEx = self.engine.cast()?;
+        let count = unsafe { engine.GetNumberOfStreams() }?;
+        let wanted = mirrored(count, self.stream);
+        for stream in 0..count {
+            unsafe { engine.SetStreamSelection(stream, Some(stream) == wanted) }?;
+        }
+        unsafe { engine.ApplyStreamSelections() }?;
+        Ok(())
+    }
+
+    fn set_gain(&self, gain: f64) {
+        let _ = unsafe { self.engine.SetVolume(gain.clamp(0.0, 1.0)) };
+        let _ = unsafe { self.engine.SetMuted(gain <= 0.0) };
+    }
+
+    fn follow(&mut self, leader: &IMFMediaEngine) {
+        if self.corrected.elapsed() < DRIFT_PAUSE || unsafe { self.engine.IsSeeking() }.as_bool() {
+            return;
+        }
+        let wanted = unsafe { leader.GetCurrentTime() };
+        if (unsafe { self.engine.GetCurrentTime() } - wanted).abs() > DRIFT {
+            let _ = unsafe { self.engine.SetCurrentTime(wanted) };
+            self.corrected = Instant::now();
+        }
+    }
+}
+
+fn voices(source: &BSTR, streams: &[u32], wake: &Sender<Command>) -> Vec<Voice> {
+    if streams.len() < 2 {
+        return Vec::new();
+    }
+    streams
+        .iter()
+        .map(|stream| Voice::open(source, *stream, wake.clone()))
+        .collect::<Result<_>>()
+        .unwrap_or_default()
+}
+
+fn audio_streams(path: &Path) -> Vec<u32> {
+    let Ok(reader) = open_reader(path) else {
+        return Vec::new();
+    };
+    tracks(&reader)
+        .into_iter()
+        .filter(|(_, media_type)| {
+            unsafe { media_type.GetGUID(&MF_MT_MAJOR_TYPE) }
+                .is_ok_and(|major| major == MFMediaType_Audio)
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+fn mirrored(count: u32, stream: u32) -> Option<u32> {
+    count.checked_sub(stream + 1)
+}
+
+fn play_every_track(engine: &IMFMediaEngine, streams: &[u32]) -> Result<()> {
+    if streams.len() < 2 {
+        return Ok(());
+    }
+    let engine: IMFMediaEngineEx = engine.cast()?;
+    let count = unsafe { engine.GetNumberOfStreams() }?;
+    for stream in streams.iter().filter_map(|stream| mirrored(count, *stream)) {
+        unsafe { engine.SetStreamSelection(stream, true) }?;
+    }
+    unsafe { engine.ApplyStreamSelections() }?;
+    Ok(())
 }
 
 fn accept(command: Command, bounds: &mut (u32, u32), pending: &mut Vec<Command>) -> bool {
@@ -476,8 +587,16 @@ fn run<F: Fn(Frame), S: Fn()>(
     let _runtime = Runtime::enter()?;
     let (device, context) = device()?;
     let flags = Arc::new(Flags::default());
-    let engine = engine(&device, &flags, wake)?;
-    unsafe { engine.SetSource(&BSTR::from(path.to_string_lossy().as_ref())) }?;
+    let source = BSTR::from(path.to_string_lossy().as_ref());
+    let streams = audio_streams(path);
+    let mut voices = voices(&source, &streams, &wake);
+    let engine = engine(Some(&device), &flags, wake)?;
+    unsafe { engine.SetSource(&source) }?;
+    if !voices.is_empty() {
+        unsafe { engine.SetMuted(true) }?;
+    }
+    let mut gains: Vec<f64> = Vec::new();
+    let mut rate = 1.0;
     let mut surface: Option<Surface> = None;
     let mut native = (0, 0);
     let mut last_pts = i64::MIN;
@@ -500,6 +619,9 @@ fn run<F: Fn(Frame), S: Fn()>(
             native = (width, height);
             surface = Some(Surface::new(&device, fit(native, bounds))?);
             refresh = true;
+            if voices.is_empty() {
+                let _ = play_every_track(&engine, &streams);
+            }
         }
         let wanted = fit(native, bounds);
         if surface
@@ -510,28 +632,85 @@ fn run<F: Fn(Frame), S: Fn()>(
             refresh = true;
         }
         if surface.is_some() {
+            for (index, voice) in voices.iter_mut().enumerate() {
+                if voice.ready || !voice.flags.loaded.load(Ordering::Acquire) {
+                    continue;
+                }
+                voice.ready = true;
+                let _ = voice.select();
+                voice.set_gain(gains.get(index).copied().unwrap_or(1.0));
+                let _ = unsafe { voice.engine.SetPlaybackRate(rate) };
+                let _ = unsafe { voice.engine.SetCurrentTime(engine.GetCurrentTime()) };
+                if !unsafe { engine.IsPaused() }.as_bool() {
+                    let _ = unsafe { voice.engine.Play() };
+                }
+                voice.corrected = Instant::now();
+            }
+            let heard = || voices.iter().filter(|voice| voice.ready);
             for command in pending.drain(..) {
                 match command {
                     Command::Play => {
                         if unsafe { engine.IsEnded() }.as_bool() {
                             unsafe { engine.SetCurrentTime(0.0) }?;
+                            for voice in heard() {
+                                let _ = unsafe { voice.engine.SetCurrentTime(0.0) };
+                            }
                         }
                         unsafe { engine.Play() }?;
+                        for voice in heard() {
+                            let _ = unsafe { voice.engine.Play() };
+                        }
                         flags.ended.store(false, Ordering::Release);
                     }
-                    Command::Pause => unsafe { engine.Pause() }?,
+                    Command::Pause => {
+                        unsafe { engine.Pause() }?;
+                        for voice in heard() {
+                            let _ = unsafe { voice.engine.Pause() };
+                        }
+                    }
                     Command::Seek(seconds) => {
                         let current = unsafe { engine.GetCurrentTime() };
                         if (current - seconds).abs() > SEEK_EPSILON {
                             unsafe { engine.SetCurrentTime(seconds) }?;
                         }
+                        for voice in heard() {
+                            let _ = unsafe { voice.engine.SetCurrentTime(seconds) };
+                        }
                         flags.ended.store(false, Ordering::Release);
                         refresh = true;
                     }
-                    Command::Volume(volume) => unsafe { engine.SetVolume(volume) }?,
-                    Command::Muted(muted) => unsafe { engine.SetMuted(muted) }?,
-                    Command::Rate(rate) => unsafe { engine.SetPlaybackRate(rate) }?,
-                    Command::Resize(_) | Command::Wake | Command::Close => {}
+                    Command::Volume(volume) if voices.is_empty() => {
+                        unsafe { engine.SetVolume(volume) }?
+                    }
+                    Command::Muted(muted) if voices.is_empty() => {
+                        unsafe { engine.SetMuted(muted) }?
+                    }
+                    Command::Tracks(wanted) => {
+                        gains = wanted;
+                        for (voice, gain) in voices.iter().zip(&gains) {
+                            voice.set_gain(*gain);
+                        }
+                    }
+                    Command::Rate(wanted) => {
+                        rate = wanted;
+                        unsafe { engine.SetPlaybackRate(rate) }?;
+                        for voice in heard() {
+                            let _ = unsafe { voice.engine.SetPlaybackRate(rate) };
+                        }
+                    }
+                    Command::Volume(_)
+                    | Command::Muted(_)
+                    | Command::Resize(_)
+                    | Command::Wake
+                    | Command::Close => {}
+                }
+            }
+            let settled = !unsafe { engine.IsPaused() }.as_bool()
+                && !unsafe { engine.IsSeeking() }.as_bool()
+                && !unsafe { engine.IsEnded() }.as_bool();
+            if settled {
+                for voice in voices.iter_mut().filter(|voice| voice.ready) {
+                    voice.follow(&engine);
                 }
             }
         }
@@ -582,7 +761,14 @@ fn run<F: Fn(Frame), S: Fn()>(
 
 #[cfg(test)]
 mod tests {
-    use super::fit;
+    use super::{fit, mirrored};
+
+    #[test]
+    fn the_engine_counts_streams_from_the_other_end_of_the_file() {
+        assert_eq!(mirrored(4, 2), Some(1));
+        assert_eq!(mirrored(4, 0), Some(3));
+        assert_eq!(mirrored(2, 5), None);
+    }
 
     #[test]
     fn fit_keeps_aspect_and_never_upscales() {

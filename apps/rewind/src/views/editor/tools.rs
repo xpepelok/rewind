@@ -446,13 +446,30 @@ impl Editor {
         let Some(player) = &self.player else {
             return;
         };
-        let (gain, _) = self.edit.mix.gains();
-        let muted = gain <= 0.0 || self.edit.muted_at(self.now());
+        let gain = if self.audio_tracks > 1 {
+            self.edit.mix.master_gain()
+        } else {
+            self.edit.mix.gains().0
+        };
+        let silenced = self.edit.muted_at(self.now());
+        let muted = gain <= 0.0 || silenced;
         let volume = gain.min(1.0);
-        if self.preview_audio != Some((volume, muted)) {
+        let mix = self.edit.mix;
+        if self.preview_audio != Some((mix, silenced)) {
             player.set_volume(f64::from(volume));
             player.set_muted(muted);
-            self.preview_audio = Some((volume, muted));
+            player.set_tracks(
+                (0..self.audio_tracks)
+                    .map(|track| {
+                        if silenced {
+                            0.0
+                        } else {
+                            f64::from(mix.track_gain(track))
+                        }
+                    })
+                    .collect(),
+            );
+            self.preview_audio = Some((mix, silenced));
         }
     }
 

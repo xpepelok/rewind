@@ -164,11 +164,27 @@ fn add_ex_style(hwnd: HWND, style: u32) {
     unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, current | style as isize) };
 }
 
+fn without_border(hwnd: HWND) {
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DwmSetWindowAttribute,
+    };
+    let none = DWMWA_COLOR_NONE;
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            (&none as *const u32).cast(),
+            size_of::<u32>() as u32,
+        )
+    };
+}
+
 pub fn prepare_overlay(window: &Window, captured: bool) {
     let Some(hwnd) = hwnd(window) else {
         return;
     };
     show_in_capture(window, captured);
+    without_border(hwnd);
     add_ex_style(hwnd, (WS_EX_TOPMOST | WS_EX_TOOLWINDOW).0);
 }
 
@@ -177,6 +193,7 @@ pub fn prepare_hud(window: &Window, captured: bool) {
         return;
     };
     show_in_capture(window, captured);
+    without_border(hwnd);
     add_ex_style(
         hwnd,
         (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TOOLWINDOW).0,
@@ -250,6 +267,7 @@ pub fn cover(window: &Window, monitor: windows::Win32::Foundation::RECT) {
                 size_of::<windows::core::BOOL>() as u32,
             )
         };
+        without_border(hwnd);
         add_ex_style(hwnd, (WS_EX_TOPMOST | WS_EX_TOOLWINDOW).0);
         let place = |left: i32, top: i32, width: i32, height: i32| {
             let _ = unsafe {

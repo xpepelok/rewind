@@ -633,6 +633,14 @@ pub struct Profiles {
 }
 
 impl Profiles {
+    pub fn executables(&self) -> Vec<String> {
+        self.games
+            .iter()
+            .filter(|_| self.enabled)
+            .map(|game| game.executable.clone())
+            .collect()
+    }
+
     pub fn running(
         &self,
         running: &std::collections::HashMap<String, u32>,
@@ -719,6 +727,21 @@ pub struct Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_enabled_profiles_name_their_games() {
+        let mut profiles = Profiles {
+            enabled: false,
+            games: vec![GameProfile {
+                name: "Cristalix".to_owned(),
+                executable: "java.exe".to_owned(),
+                video: Video::default(),
+            }],
+        };
+        assert!(profiles.executables().is_empty());
+        profiles.enabled = true;
+        assert_eq!(profiles.executables(), ["java.exe"]);
+    }
 
     #[test]
     fn a_selection_is_saved_only_together_with_copying_it() {

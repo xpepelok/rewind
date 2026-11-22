@@ -14,6 +14,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::PWSTR;
 
 const SHELL_CLASSES: [&str; 3] = ["Progman", "WorkerW", "Shell_TrayWnd"];
+const ENGINE_CLASSES: [&str; 5] = [
+    "GLFW30",
+    "LWJGL",
+    "SDL_app",
+    "UnityWndClass",
+    "UnrealWindow",
+];
 const CLASS_CAPACITY: usize = 64;
 const PATH_CAPACITY: usize = 1024;
 
@@ -40,6 +47,19 @@ pub fn is_fullscreen_app() -> bool {
 }
 
 static KNOWN_GAME: Mutex<Option<((isize, u32), bool)>> = Mutex::new(None);
+static LISTED_GAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+pub fn set_games(executables: Vec<String>) {
+    *LISTED_GAMES.lock() = executables;
+    *KNOWN_GAME.lock() = None;
+}
+
+fn listed(games: &[String], path: &std::path::Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy();
+        games.iter().any(|game| game.eq_ignore_ascii_case(&name))
+    })
+}
 
 pub fn game_window() -> Option<HWND> {
     let window = foreground()?;
@@ -53,8 +73,11 @@ pub fn game_window() -> Option<HWND> {
     let known = match cached {
         Some((seen, known)) if seen == key => known,
         _ => {
-            let known = image_path(process)
-                .is_some_and(|path| crate::catalog::display_name(&path).is_some());
+            let known = ENGINE_CLASSES.contains(&class_name(window).as_str())
+                || image_path(process).is_some_and(|path| {
+                    listed(&LISTED_GAMES.lock(), &path)
+                        || crate::catalog::display_name(&path).is_some()
+                });
             *KNOWN_GAME.lock() = Some((key, known));
             known
         }
@@ -228,4 +251,22 @@ pub fn running_programs() -> std::collections::HashMap<String, u32> {
         .into_iter()
         .map(|(process, _, name)| (name.to_lowercase(), process))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::listed;
+    use std::path::Path;
+
+    #[test]
+    fn a_listed_game_is_recognised_by_its_file_name_in_any_case() {
+        let games = ["java.exe".to_owned(), "Game.exe".to_owned()];
+        assert!(listed(
+            &games,
+            Path::new(r"C:\Games\Cristalix\runtime\bin\Java.EXE")
+        ));
+        assert!(listed(&games, Path::new(r"D:\game.exe")));
+        assert!(!listed(&games, Path::new(r"C:\Program Files\javaw.exe")));
+        assert!(!listed(&[], Path::new(r"D:\game.exe")));
+    }
 }

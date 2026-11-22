@@ -50,6 +50,10 @@ const DISCORD_SEARCH_CHECKS: u32 = 3;
 const DISCORD_REVIEW_CHECKS: u32 = 10;
 const SEPARATE_TRACKS: usize = 3;
 const MAX_BACKLOG_FRAMES: usize = (SAMPLE_RATE / 5) as usize;
+const KEPT_SAMPLES: usize = (SAMPLE_RATE / 20 * CHANNELS) as usize;
+const SLACK_SAMPLES: usize = 2 * KEPT_SAMPLES;
+const LATE_SAMPLES: usize = 4 * KEPT_SAMPLES;
+const QUIET_LEVEL: f32 = 0.001;
 const AAC_FRAME: i64 = 1024;
 const SETTLED_FRAMES: i64 = 4 * AAC_FRAME;
 const QUIET_AFTER_FRAMES: i64 = (SAMPLE_RATE / 2) as i64;
@@ -234,10 +238,35 @@ impl Source {
         }
         Ok(())
     }
+
+    fn flush(&mut self) {
+        let _ = self.read();
+        self.fifo.clear();
+    }
+}
+
+fn catch_up(fifo: &mut VecDeque<f32>) {
+    if fifo.len() <= SLACK_SAMPLES {
+        return;
+    }
+    let excess = fifo.len() - KEPT_SAMPLES;
+    let excess = excess - excess % CHANNELS as usize;
+    let quiet = || {
+        fifo.iter()
+            .take(excess)
+            .all(|sample| sample.abs() < QUIET_LEVEL)
+    };
+    if fifo.len() > LATE_SAMPLES || quiet() {
+        fifo.drain(..excess);
+    }
 }
 
 fn take(source: Option<&mut Source>, count: usize, gain: f32, into: &mut Vec<f32>) {
-    drain(source.map(|source| &mut source.fifo), count, gain, into);
+    let mut fifo = source.map(|source| &mut source.fifo);
+    drain(fifo.as_deref_mut(), count, gain, into);
+    if let Some(fifo) = fifo {
+        catch_up(fifo);
+    }
 }
 
 fn drain(fifo: Option<&mut VecDeque<f32>>, count: usize, gain: f32, into: &mut Vec<f32>) {
@@ -534,9 +563,10 @@ fn open_outputs(
 ) -> (Option<Source>, Option<Source>) {
     if let Some(process) = discord {
         let id = default_render_id(enumerator);
-        if let Ok(voice) = Source::process(process, Capture::Only, id.clone())
+        if let Ok(mut voice) = Source::process(process, Capture::Only, id.clone())
             && let Ok(system) = Source::process(process, Capture::Without, id)
         {
+            voice.flush();
             return (Some(system), Some(voice));
         }
     }
@@ -621,6 +651,10 @@ pub fn run(
             .map(|encoder| encoder.format.clone())
             .collect(),
     );
+    [&mut loopback, &mut voice, &mut microphone]
+        .into_iter()
+        .flatten()
+        .for_each(Source::flush);
     let start = clock::now();
     let mut produced: i64 = 0;
     let mut mixed: Vec<Vec<i16>> = vec![Vec::with_capacity(4096); encoders.len()];
@@ -693,6 +727,37 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn backlog(quiet: usize, loud: usize) -> VecDeque<f32> {
+        std::iter::repeat_n(0.0, quiet)
+            .chain(std::iter::repeat_n(0.5, loud))
+            .collect()
+    }
+
+    #[test]
+    fn an_ordinary_backlog_is_left_alone() {
+        let mut fifo = backlog(SLACK_SAMPLES, 0);
+        catch_up(&mut fifo);
+        assert_eq!(fifo.len(), SLACK_SAMPLES);
+    }
+
+    #[test]
+    fn a_quiet_backlog_is_dropped_so_the_sound_after_it_is_not_late() {
+        let mut fifo = backlog(SLACK_SAMPLES, KEPT_SAMPLES);
+        catch_up(&mut fifo);
+        assert_eq!(fifo.len(), KEPT_SAMPLES);
+        assert!(fifo.iter().all(|sample| *sample == 0.5));
+    }
+
+    #[test]
+    fn a_loud_backlog_is_kept_until_it_is_too_late_to_play() {
+        let mut fifo = backlog(0, LATE_SAMPLES);
+        catch_up(&mut fifo);
+        assert_eq!(fifo.len(), LATE_SAMPLES);
+        fifo.extend([0.5, 0.5]);
+        catch_up(&mut fifo);
+        assert_eq!(fifo.len(), KEPT_SAMPLES);
+    }
 
     #[test]
     fn pcm_conversion_clamps() {

@@ -17,7 +17,7 @@ use youtube::{Privacy, PublishSettings};
 
 use parking_lot::Mutex;
 use rewind_media::{
-    Edit, MediaInfo, Player, PlayerState, Span, audio_tracks, export, export_in_place, probe,
+    Edit, MediaInfo, Mix, Player, PlayerState, Span, audio_tracks, export, export_in_place, probe,
 };
 
 mod tools;
@@ -106,7 +106,7 @@ pub struct Editor {
     lane: Option<Bounds<Pixels>>,
     ink: usize,
     ink_size: usize,
-    preview_audio: Option<(f32, bool)>,
+    preview_audio: Option<(Mix, bool)>,
     progress: Arc<Mutex<f32>>,
     dragging: Option<Handle>,
     track: Option<Bounds<Pixels>>,
@@ -780,6 +780,7 @@ impl Editor {
         self.error = None;
         let mut edit = self.edit.clone();
         edit.height = self.quality.filter(|height| *height < self.source_height());
+        edit.merge_audio = true;
         if edit.span.is_whole(self.duration()) && !edit.needs_render() {
             let source = self.path.clone();
             self.state.update(cx, |rewind, cx| {

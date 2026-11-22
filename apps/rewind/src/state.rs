@@ -480,6 +480,7 @@ impl Rewind {
     }
 
     fn scan_profiles(&mut self, cx: &mut Context<Self>) {
+        rewind_capture::set_games(self.settings.profiles.executables());
         if !self.settings.profiles.enabled {
             self.switch_profile(None, cx);
             return;

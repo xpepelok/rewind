@@ -21,7 +21,7 @@ use windows::core::{GUID, HSTRING};
 use crate::edit::{Edit, PixelRect, Stroke};
 use crate::effects::{Coverage, Image, Plane, blur, paint_mask, scale_into, stroke_mask};
 use crate::error::{MediaError, Result};
-use crate::mixdown::{CHANNELS, mixdown, resample, to_stereo};
+use crate::mixdown::{CHANNELS, mixdown, resample, separate, to_stereo};
 use crate::probe::tracks;
 use crate::span::Span;
 use crate::stretch::stretch;
@@ -137,25 +137,34 @@ fn read_track(path: &Path, stream: u32, span: Span) -> Result<Vec<f32>> {
     Ok(resample(to_stereo(samples, channels), rate, RATE))
 }
 
-fn prepare_audio(path: &Path, edit: &Edit) -> Result<Option<Vec<i16>>> {
+fn prepare_audio(path: &Path, edit: &Edit) -> Result<Vec<Vec<i16>>> {
     let streams = streams_of(&reader(path)?, MFMediaType_Audio);
     if streams.is_empty() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let tracks = streams
         .iter()
         .map(|stream| read_track(path, *stream, edit.span))
         .collect::<Result<Vec<_>>>()?;
-    let mixed = mixdown(&tracks, RATE, edit.span.start, &edit.mix, &edit.mutes);
+    let (origin, mix, mutes) = (edit.span.start, &edit.mix, &edit.mutes);
+    let kept = if edit.merge_audio {
+        vec![mixdown(&tracks, RATE, origin, mix, mutes)]
+    } else {
+        separate(&tracks, RATE, origin, mix, mutes)
+    };
     drop(tracks);
-    let stretched = stretch(mixed, CHANNELS, RATE, edit.speed);
     let frames = (edit.output_length().as_secs_f64() * f64::from(RATE)) as usize;
-    let mut pcm: Vec<i16> = stretched
-        .iter()
-        .map(|sample| (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16)
-        .collect();
-    pcm.resize(frames * CHANNELS, 0);
-    Ok(Some(pcm))
+    Ok(kept
+        .into_iter()
+        .map(|track| {
+            let mut pcm: Vec<i16> = stretch(track, CHANNELS, RATE, edit.speed)
+                .iter()
+                .map(|sample| (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16)
+                .collect();
+            pcm.resize(frames * CHANNELS, 0);
+            pcm
+        })
+        .collect())
 }
 
 struct Video {
@@ -237,14 +246,14 @@ fn bitrate(size: (u32, u32), fps: (u32, u32)) -> u32 {
 struct Output {
     writer: IMFSinkWriter,
     video: u32,
-    audio: Option<u32>,
+    audio: Vec<u32>,
 }
 
 fn open_output(
     destination: &Path,
     size: (u32, u32),
     fps: (u32, u32),
-    with_audio: bool,
+    audio_tracks: usize,
     wanted_bitrate: Option<u32>,
 ) -> Result<Output> {
     let mut attributes: Option<IMFAttributes> = None;
@@ -272,15 +281,14 @@ fn open_output(
         input.SetUINT32(&MF_MT_DEFAULT_STRIDE, size.0 * 4)?;
         writer.SetInputMediaType(video, &input, None)?;
     }
-    let audio = if with_audio {
+    let mut audio = Vec::with_capacity(audio_tracks);
+    for _ in 0..audio_tracks {
         let stream =
             unsafe { writer.AddStream(&audio_type(&MFAudioFormat_AAC, AAC_BYTES_PER_SECOND)?) }?;
         let pcm = audio_type(&MFAudioFormat_PCM, RATE * (CHANNELS as u32) * 2)?;
         unsafe { writer.SetInputMediaType(stream, &pcm, None) }?;
-        Some(stream)
-    } else {
-        None
-    };
+        audio.push(stream);
+    }
     unsafe { writer.BeginWriting() }?;
     Ok(Output {
         writer,
@@ -315,13 +323,13 @@ fn write_bytes(
 }
 
 struct AudioFeed {
-    pcm: Vec<i16>,
+    tracks: Vec<Vec<i16>>,
     written: usize,
 }
 
 impl AudioFeed {
     fn frames(&self) -> usize {
-        self.pcm.len() / CHANNELS
+        self.tracks.first().map_or(0, |pcm| pcm.len() / CHANNELS)
     }
 
     fn time_of(frame: usize) -> i64 {
@@ -329,22 +337,22 @@ impl AudioFeed {
     }
 
     fn write_until(&mut self, output: &Output, until: i64) -> Result<()> {
-        let Some(stream) = output.audio else {
-            return Ok(());
-        };
         while self.written < self.frames() && Self::time_of(self.written) <= until {
             let end = (self.written + AUDIO_CHUNK_FRAMES).min(self.frames());
-            let chunk = &self.pcm[self.written * CHANNELS..end * CHANNELS];
-            let bytes =
-                unsafe { std::slice::from_raw_parts(chunk.as_ptr() as *const u8, chunk.len() * 2) };
             let time = Self::time_of(self.written);
-            write_bytes(
-                &output.writer,
-                stream,
-                bytes,
-                time,
-                Self::time_of(end) - time,
-            )?;
+            for (stream, pcm) in output.audio.iter().zip(&self.tracks) {
+                let chunk = &pcm[self.written * CHANNELS..end * CHANNELS];
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(chunk.as_ptr() as *const u8, chunk.len() * 2)
+                };
+                write_bytes(
+                    &output.writer,
+                    *stream,
+                    bytes,
+                    time,
+                    Self::time_of(end) - time,
+                )?;
+            }
             self.written = end;
         }
         Ok(())
@@ -508,11 +516,11 @@ pub fn render(
         destination,
         frame_size,
         video.fps,
-        audio.is_some(),
+        audio.len(),
         edit.bitrate,
     )?;
     let mut feed = AudioFeed {
-        pcm: audio.unwrap_or_default(),
+        tracks: audio,
         written: 0,
     };
     let speed = f64::from(edit.speed.max(0.01));

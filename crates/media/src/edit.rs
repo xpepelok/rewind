@@ -218,8 +218,12 @@ impl Mix {
         *self == Self::default()
     }
 
+    pub fn master_gain(&self) -> f32 {
+        if self.master_muted { 0.0 } else { self.master }
+    }
+
     pub fn gains(&self) -> (f32, f32) {
-        let master = if self.master_muted { 0.0 } else { self.master };
+        let master = self.master_gain();
         let game = if self.game_muted { 0.0 } else { self.game };
         let mic = if self.mic_muted { 0.0 } else { self.mic };
         (master * game, master * mic)
@@ -254,6 +258,7 @@ pub struct Edit {
     pub mix: Mix,
     pub height: Option<u32>,
     pub bitrate: Option<u32>,
+    pub merge_audio: bool,
 }
 
 impl Edit {
@@ -268,6 +273,7 @@ impl Edit {
             mix: Mix::default(),
             height: None,
             bitrate: None,
+            merge_audio: false,
         }
     }
 

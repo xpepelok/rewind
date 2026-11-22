@@ -45,6 +45,7 @@ pub fn share_clip(
     let _runtime = rewind_media::Runtime::enter();
     let info = probe(source).map_err(|error| ShareError::Failed(error.to_string()))?;
     let mut edit = edit.unwrap_or_else(|| Edit::new(Span::whole(info.duration)));
+    edit.merge_audio = true;
     let source_height = {
         let mut whole = edit.clone();
         whole.height = None;

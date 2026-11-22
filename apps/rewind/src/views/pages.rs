@@ -2160,16 +2160,24 @@ impl Overlay {
                 &p,
             ))
             .child(icon(Icon::Folder, ICON, p.text))
-            .on_click(cx.listener(move |overlay, _, window, cx| {
-                let picked = rfd::FileDialog::new()
+            .on_click(cx.listener(move |_, _, window, cx| {
+                let picking = rfd::AsyncFileDialog::new()
                     .set_directory(&current)
                     .set_parent(window)
                     .pick_folder();
-                if let Some(folder) = picked {
-                    overlay.state.update(cx, |rewind, cx| {
-                        rewind.change(|settings| apply(settings, folder), cx)
-                    });
-                }
+                cx.spawn(async move |this, cx| {
+                    let Some(folder) = picking.await else {
+                        return;
+                    };
+                    let folder = folder.path().to_path_buf();
+                    this.update(cx, |overlay, cx| {
+                        overlay.state.update(cx, |rewind, cx| {
+                            rewind.change(|settings| apply(settings, folder), cx)
+                        });
+                    })
+                    .ok();
+                })
+                .detach();
             }))
     }
 
