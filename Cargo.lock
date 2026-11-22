@@ -4732,7 +4732,7 @@ dependencies = [
 
 [[package]]
 name = "rewind"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "futures",
@@ -4759,7 +4759,7 @@ dependencies = [
 
 [[package]]
 name = "rewind-capture"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "parking_lot",
  "rewind-media",
@@ -4771,7 +4771,7 @@ dependencies = [
 
 [[package]]
 name = "rewind-config"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -4781,7 +4781,7 @@ dependencies = [
 
 [[package]]
 name = "rewind-hotkey"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "parking_lot",
  "rewind-config",
@@ -4791,7 +4791,7 @@ dependencies = [
 
 [[package]]
 name = "rewind-media"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "parking_lot",
  "rewind-trace",
@@ -4803,7 +4803,7 @@ dependencies = [
 
 [[package]]
 name = "rewind-nvbus"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "tempfile",
  "thiserror 2.0.21",
@@ -4812,7 +4812,7 @@ dependencies = [
 
 [[package]]
 name = "rewind-trace"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "tempfile",
  "windows 0.61.3",
@@ -7057,7 +7057,7 @@ dependencies = [
 
 [[package]]
 name = "youtube"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "dirs 5.0.1",
  "libc",
