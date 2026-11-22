@@ -20,6 +20,7 @@ rewind-config.workspace = true
 rewind-hotkey.workspace = true
 rewind-media.workspace = true
 rewind-nvbus.workspace = true
+rewind-trace.workspace = true
 image = { version = "0.25", default-features = false }
 smallvec = "1"
 youtube.workspace = true

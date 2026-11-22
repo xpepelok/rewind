@@ -19,6 +19,7 @@ use parking_lot::Mutex;
 use rewind_media::{
     Edit, MediaInfo, Mix, Player, PlayerState, Span, audio_tracks, export, export_in_place, probe,
 };
+use rewind_trace::{Traced, trace};
 
 mod tools;
 
@@ -694,7 +695,7 @@ impl Editor {
                 .background_executor()
                 .spawn(async move {
                     let _runtime = rewind_media::Runtime::enter();
-                    job()
+                    job().traced("editor", "apply the edit to the clip")
                 })
                 .await;
             this.update_in(cx, |editor, window, cx| {
@@ -801,7 +802,9 @@ impl Editor {
                         std::fs::create_dir_all(parent).ok();
                     }
                     let _runtime = rewind_media::Runtime::enter();
+                    trace!("editor", "exporting {source:?} to {target:?} with {edit:?}");
                     export(&source, &edit, &target, &report)
+                        .traced("editor", "export the clip for publishing")
                 })
                 .await;
             this.update(cx, |editor, cx| {

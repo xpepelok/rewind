@@ -1,11 +1,21 @@
+use std::time::{Duration, Instant};
+
 use gpui::Window;
+use parking_lot::Mutex;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use rewind_trace::{Traced, trace};
 use windows::Win32::Foundation::{COLORREF, HWND};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+};
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, LWA_ALPHA, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetLayeredWindowAttributes,
-    SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos, ShowWindow, WDA_EXCLUDEFROMCAPTURE,
-    WDA_NONE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, HWND_TOP, HWND_TOPMOST, IsIconic, IsWindow, LWA_ALPHA, SW_HIDE,
+    SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SetForegroundWindow, SetLayeredWindowAttributes, SetWindowDisplayAffinity, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 
 const OPAQUE: u8 = 255;
@@ -204,12 +214,140 @@ pub fn prepare_hud(window: &Window, captured: bool) {
 }
 
 pub fn show_overlay(window: &mut Window) {
+    let game = fullscreen_game();
     if let Some(hwnd) = hwnd(window) {
         let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
         topmost(hwnd);
         let _ = unsafe { SetForegroundWindow(hwnd) };
     }
     window.activate_window();
+    if let (Some(game), Some(overlay)) = (game, hwnd(window)) {
+        *COVERED_GAME.lock() = Some(game.0 as isize);
+        keep_open(game, overlay);
+    }
+}
+
+const SHELL_CLASSES: [&str; 2] = ["Progman", "WorkerW"];
+const GAME_WATCH: Duration = Duration::from_millis(1500);
+const GAME_POLL: Duration = Duration::from_millis(15);
+const AREA: &str = "window";
+
+static COVERED_GAME: Mutex<Option<isize>> = Mutex::new(None);
+
+fn ours(window: HWND) -> bool {
+    let mut process = 0u32;
+    unsafe { GetWindowThreadProcessId(window, Some(&mut process)) };
+    process == std::process::id()
+}
+
+fn class_of(window: HWND) -> String {
+    let mut buffer = [0u16; 64];
+    let length = unsafe { GetClassNameW(window, &mut buffer) };
+    String::from_utf16_lossy(&buffer[..length.max(0) as usize])
+}
+
+fn fills_its_screen(window: HWND) -> bool {
+    let mut place = Extent::default();
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
+    unsafe { GetWindowRect(window, &mut place) }.is_ok()
+        && unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool()
+        && covers(place, info.rcMonitor)
+}
+
+const fn covers(window: Extent, screen: Extent) -> bool {
+    window.left <= screen.left
+        && window.top <= screen.top
+        && window.right >= screen.right
+        && window.bottom >= screen.bottom
+}
+
+fn fullscreen_game() -> Option<HWND> {
+    let window = unsafe { GetForegroundWindow() };
+    let game = !window.is_invalid()
+        && !ours(window)
+        && !unsafe { IsIconic(window) }.as_bool()
+        && fills_its_screen(window)
+        && !SHELL_CLASSES.contains(&class_of(window).as_str());
+    game.then_some(window)
+}
+
+fn focus(target: HWND) -> bool {
+    let focused = || unsafe { GetForegroundWindow() } == target;
+    if unsafe { SetForegroundWindow(target) }.as_bool() && focused() {
+        return true;
+    }
+    let holder = unsafe { GetWindowThreadProcessId(GetForegroundWindow(), None) };
+    let caller = unsafe { GetCurrentThreadId() };
+    let _ = unsafe { AttachThreadInput(caller, holder, true) };
+    let _ = unsafe { SetForegroundWindow(target) };
+    let _ = unsafe { AttachThreadInput(caller, holder, false) };
+    focused()
+}
+
+fn keep_open(game: HWND, overlay: HWND) {
+    let handle = game.0 as isize;
+    let above = overlay.0 as isize;
+    trace!(
+        AREA,
+        "a full screen window {handle:#x} of class {:?} is under the overlay, keeping it open",
+        class_of(game)
+    );
+    std::thread::Builder::new()
+        .name("rewind-keep-open".to_owned())
+        .spawn(move || {
+            let game = HWND(handle as *mut core::ffi::c_void);
+            let overlay = HWND(above as *mut core::ffi::c_void);
+            let started = Instant::now();
+            while started.elapsed() < GAME_WATCH {
+                if unsafe { IsIconic(game) }.as_bool() {
+                    let _ = unsafe { ShowWindow(game, SW_SHOWNOACTIVATE) };
+                    let _ = unsafe {
+                        SetWindowPos(
+                            game,
+                            Some(HWND_TOP),
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        )
+                    };
+                    let focused = focus(overlay);
+                    trace!(
+                        AREA,
+                        "the full screen window {handle:#x} minimized itself after {:?}, brought back without focus, still minimized {}, overlay focused {focused}",
+                        started.elapsed(),
+                        unsafe { IsIconic(game) }.as_bool()
+                    );
+                }
+                std::thread::sleep(GAME_POLL);
+            }
+        })
+        .traced(AREA, "start watching the full screen window")
+        .ok();
+}
+
+fn return_to_game() {
+    let Some(handle) = COVERED_GAME.lock().take() else {
+        return;
+    };
+    let game = HWND(handle as *mut core::ffi::c_void);
+    let focused = unsafe { GetForegroundWindow() };
+    if !unsafe { IsWindow(Some(game)) }.as_bool() || !(focused.is_invalid() || ours(focused)) {
+        return;
+    }
+    if unsafe { IsIconic(game) }.as_bool() {
+        let _ = unsafe { ShowWindow(game, SW_RESTORE) };
+    }
+    let returned = focus(game);
+    trace!(
+        AREA,
+        "focus returned to the full screen window {handle:#x}: {returned}"
+    );
 }
 
 pub fn inner_placement(
@@ -242,6 +380,7 @@ pub fn inner_placement(
 
 pub fn hide(window: &Window) {
     if let Some(hwnd) = hwnd(window) {
+        return_to_game();
         let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
     }
 }
@@ -304,7 +443,11 @@ pub fn cover(window: &Window, monitor: windows::Win32::Foundation::RECT) {
                 height + top + bottom,
             );
         }
+        let game = fullscreen_game();
         let _ = unsafe { SetForegroundWindow(hwnd) };
+        if let Some(game) = game {
+            keep_open(game, hwnd);
+        }
     }
 }
 

@@ -149,6 +149,7 @@ impl Rewind {
                 })
                 .await;
             if let Err(error) = result {
+                rewind_trace::trace!("update", "FAILED download or apply the update: {error:?}");
                 this.update(cx, |rewind, cx| {
                     rewind.update_stage = Stage::Failed(error);
                     cx.notify();

@@ -6,6 +6,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
+use rewind_trace::{Traced, trace};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_DEVICE_REMOVED};
@@ -53,6 +54,7 @@ const DISK_RESERVE: u64 = 10 * 1024 * 1024 * 1024;
 const MEMORY_SHARE: u64 = 4;
 const STARTUP_GRACE: Duration = Duration::from_secs(4);
 const STALL_AFTER: Duration = Duration::from_secs(5);
+const AREA: &str = "recorder";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioLayout {
@@ -334,8 +336,14 @@ impl Shared {
     fn end_save(&self, outcome: Result<Vec<RecorderEvent>>) {
         self.saving.store(false, Ordering::Release);
         match outcome {
-            Ok(events) => events.into_iter().for_each(|event| self.emit(event)),
-            Err(error) => self.emit(RecorderEvent::ReplayFailed(error.to_string())),
+            Ok(events) => {
+                trace!(AREA, "replay save finished: {events:?}");
+                events.into_iter().for_each(|event| self.emit(event));
+            }
+            Err(error) => {
+                trace!(AREA, "FAILED replay save: {error:?}");
+                self.emit(RecorderEvent::ReplayFailed(error.to_string()));
+            }
         }
     }
 
@@ -361,6 +369,7 @@ impl Shared {
 
     fn fail(&self, error: &CaptureError) {
         let reason = error.to_string();
+        trace!(AREA, "FAILED capture, reported to the app: {error:?}");
         *self.failure.lock() = Some(reason.clone());
         self.emit(RecorderEvent::Failed(reason));
     }
@@ -408,6 +417,13 @@ impl Recorder {
         replay: bool,
         events: impl Fn(RecorderEvent) + Send + Sync + 'static,
     ) -> Self {
+        trace!(
+            AREA,
+            "recorder starting, replay {replay}, plan {:?}, free disk {:?}, free memory {:?}, config {config:?}",
+            config.ring_plan(),
+            free_space(&config.temp),
+            free_memory()
+        );
         let ring = config.ring();
         let (sink, packets) = mpsc::channel();
         let shared = Arc::new(Shared {
@@ -490,6 +506,7 @@ impl Recorder {
     }
 
     pub fn set_replay(&self, enabled: bool) {
+        trace!(AREA, "replay switched to {enabled}");
         self.shared.replay.store(enabled, Ordering::Relaxed);
         if enabled {
             self.shared.requests.lock().keyframe = true;
@@ -522,9 +539,16 @@ impl Recorder {
 
     pub fn save_replay(&self) -> bool {
         if !self.shared.begin_save() {
+            trace!(AREA, "replay save refused, another save is still running");
             return false;
         }
         let path = naming::next_path(&self.shared.config.gallery, Kind::Replay);
+        trace!(
+            AREA,
+            "saving the replay to {path:?}, buffered {:?}, health {:?}",
+            self.shared.ring.lock().buffered(),
+            self.replay_health()
+        );
         let thumbnail = naming::thumbnail_path(&self.shared.config.thumbnails, &path);
         self.shared.requests.lock().thumbnail = Some(thumbnail.clone());
         self.shared.wake.nudge();
@@ -572,8 +596,17 @@ impl Recorder {
 
     pub fn save_replay_ranges(&self, ranges: Vec<(i64, i64)>, start_over: bool) -> bool {
         if !self.shared.begin_save() {
+            trace!(
+                AREA,
+                "replay range save refused, another save is still running"
+            );
             return false;
         }
+        trace!(
+            AREA,
+            "saving replay ranges {ranges:?}, start over {start_over}, buffer span {:?}",
+            self.shared.ring.lock().span()
+        );
         let clips: Vec<_> = ranges
             .into_iter()
             .filter_map(|(from, to)| {
@@ -600,12 +633,19 @@ impl Recorder {
     pub fn toggle_recording(&self) {
         let mut recording = self.shared.recording.lock();
         if let Some(active) = recording.take() {
+            trace!(
+                AREA,
+                "recording stop requested for {:?} after {:?}",
+                active.path,
+                active.started.elapsed()
+            );
             let thumbnail = naming::thumbnail_path(&self.shared.config.thumbnails, &active.path);
             self.shared.requests.lock().thumbnail = Some(thumbnail);
             self.shared.wake.nudge();
             return;
         }
         let path = naming::next_path(&self.shared.config.gallery, Kind::Recording);
+        trace!(AREA, "recording start requested, file {path:?}");
         let (sender, receiver) = mpsc::channel();
         let shared = self.shared.clone();
         let writer_path = path.clone();
@@ -614,11 +654,17 @@ impl Recorder {
             .spawn(move || {
                 let thumbnail = naming::thumbnail_path(&shared.config.thumbnails, &writer_path);
                 match record(&shared, &writer_path, &receiver) {
-                    Ok(()) => shared.emit(RecorderEvent::RecordingSaved {
-                        path: writer_path,
-                        thumbnail,
-                    }),
-                    Err(error) => shared.fail(&error),
+                    Ok(()) => {
+                        trace!(AREA, "recording written to {writer_path:?}");
+                        shared.emit(RecorderEvent::RecordingSaved {
+                            path: writer_path,
+                            thumbnail,
+                        });
+                    }
+                    Err(error) => {
+                        trace!(AREA, "FAILED recording to {writer_path:?}: {error:?}");
+                        shared.fail(&error);
+                    }
                 }
             });
         match spawned {
@@ -638,6 +684,7 @@ impl Recorder {
 
     pub fn screenshot(&self) {
         let path = naming::next_path(&self.shared.config.gallery, Kind::Screenshot);
+        trace!(AREA, "screenshot requested, file {path:?}");
         self.shared.requests.lock().screenshot = Some(path);
         self.shared.wake.nudge();
     }
@@ -645,13 +692,22 @@ impl Recorder {
 
 impl Drop for Recorder {
     fn drop(&mut self) {
+        trace!(
+            AREA,
+            "recorder stopping, recording active {}, replay {}",
+            self.is_recording(),
+            self.replay_enabled()
+        );
         self.shared.recording.lock().take();
         self.shared.stop.store(true, Ordering::Relaxed);
         self.shared.sink.lock().take();
         self.shared.wake.nudge();
         for thread in self.threads.drain(..) {
-            thread.join().ok();
+            if thread.join().is_err() {
+                trace!(AREA, "FAILED a recorder thread panicked");
+            }
         }
+        trace!(AREA, "recorder stopped");
     }
 }
 
@@ -664,22 +720,37 @@ fn save_clips(shared: &Shared, clips: Vec<crate::ring::Clip>) -> Result<Vec<Reco
         let path = naming::next_path(&shared.config.gallery, Kind::Replay);
         let thumbnail = naming::thumbnail_path(&shared.config.thumbnails, &path);
         write_snapshot(shared, &path, Some(clip))?;
-        rewind_media::thumbnail(&path, Duration::ZERO, THUMBNAIL_WIDTH, &thumbnail).ok();
+        rewind_media::thumbnail(&path, Duration::ZERO, THUMBNAIL_WIDTH, &thumbnail)
+            .traced(AREA, "make a thumbnail of the saved replay")
+            .ok();
         saved.push(RecorderEvent::ReplaySaved { path, thumbnail });
     }
     Ok(saved)
 }
 
 fn write_snapshot(shared: &Shared, path: &Path, clip: Option<crate::ring::Clip>) -> Result<()> {
-    let _runtime = Runtime::enter()?;
-    let clip = clip.ok_or(CaptureError::Empty)?;
+    let _runtime = Runtime::enter().traced(AREA, "enter the COM runtime for a save")?;
+    let clip = clip
+        .ok_or(CaptureError::Empty)
+        .traced(AREA, "take frames out of the replay buffer, it is empty")?;
     let video = shared
         .video_format
         .lock()
         .clone()
-        .ok_or(CaptureError::NoFormat)?;
+        .ok_or(CaptureError::NoFormat)
+        .traced(
+            AREA,
+            "read the video format, the encoder has produced nothing yet",
+        )?;
     let audio = shared.audio_formats.lock().clone();
-    write_clip(path, &video, &audio, &clip)
+    trace!(
+        AREA,
+        "writing a clip to {path:?}, video {}x{}, audio tracks {}",
+        video.width,
+        video.height,
+        audio.len()
+    );
+    write_clip(path, &video, &audio, &clip).traced(AREA, "write the clip file")
 }
 
 fn wait_for_formats(shared: &Shared) -> Result<(VideoFormat, Vec<AudioFormat>)> {
@@ -689,6 +760,10 @@ fn wait_for_formats(shared: &Shared) -> Result<(VideoFormat, Vec<AudioFormat>)> 
             return Ok((video, shared.audio_formats.lock().clone()));
         }
         if Instant::now() > deadline {
+            trace!(
+                AREA,
+                "FAILED the encoder gave no video format in {FORMAT_WAIT:?}"
+            );
             return Err(CaptureError::NoFormat);
         }
         thread::sleep(IDLE_DELAY);
@@ -696,15 +771,26 @@ fn wait_for_formats(shared: &Shared) -> Result<(VideoFormat, Vec<AudioFormat>)> 
 }
 
 fn record(shared: &Shared, path: &Path, packets: &mpsc::Receiver<Packet>) -> Result<()> {
-    let _runtime = Runtime::enter()?;
+    let _runtime = Runtime::enter().traced(AREA, "enter the COM runtime for a recording")?;
     let first = loop {
-        let packet = packets.recv().map_err(|_| CaptureError::Empty)?;
+        let packet = packets.recv().map_err(|_| CaptureError::Empty).traced(
+            AREA,
+            "wait for the first keyframe, the recording ended before it",
+        )?;
         if packet.track == crate::format::Track::Video && packet.keyframe {
             break packet;
         }
     };
     let (video, audio) = wait_for_formats(shared)?;
-    let mut writer = Mp4Writer::create(path, &video, &audio, first.pts)?;
+    let mut writer = Mp4Writer::create(path, &video, &audio, first.pts)
+        .traced(AREA, "create the recording file")?;
+    trace!(
+        AREA,
+        "recording file {path:?} created, video {}x{}, audio tracks {}",
+        video.width,
+        video.height,
+        audio.len()
+    );
     let mut pending = first;
     while let Ok(packet) = packets.recv() {
         if packet.track == crate::format::Track::Video {
@@ -712,13 +798,19 @@ fn record(shared: &Shared, path: &Path, packets: &mpsc::Receiver<Packet>) -> Res
             if pending.pts > previous.pts {
                 previous.duration = pending.pts - previous.pts;
             }
-            writer.write(&previous)?;
+            writer
+                .write(&previous)
+                .traced(AREA, "write a video packet to the recording")?;
         } else {
-            writer.write(&packet)?;
+            writer
+                .write(&packet)
+                .traced(AREA, "write an audio packet to the recording")?;
         }
     }
-    writer.write(&pending)?;
-    writer.finish()
+    writer
+        .write(&pending)
+        .traced(AREA, "write the last video packet to the recording")?;
+    writer.finish().traced(AREA, "finalize the recording file")
 }
 
 fn store_loop(shared: &Shared, batches: &mpsc::Receiver<Vec<Packet>>) {
@@ -751,6 +843,10 @@ fn audio_loop(shared: &Shared) {
             |packets| shared.push_all(packets),
         );
         if let Err(error) = result {
+            trace!(
+                AREA,
+                "audio session ended with an error, restarting in {RESTART_DELAY:?}"
+            );
             shared.fail(&error);
             thread::sleep(RESTART_DELAY);
         }
@@ -770,6 +866,10 @@ fn video_loop(shared: &Shared) {
                 &error,
                 CaptureError::Windows(inner)
                     if inner.code() == DXGI_ERROR_ACCESS_LOST || inner.code() == DXGI_ERROR_DEVICE_REMOVED
+            );
+            trace!(
+                AREA,
+                "FAILED video session, desktop access lost {lost}, restarting: {error:?}"
             );
             if !lost {
                 shared.fail(&error);
@@ -910,7 +1010,10 @@ fn snapshot_requests(shared: &Shared, gpu: &Gpu, texture: &ID3D11Texture2D) -> R
         thread::Builder::new()
             .name("rewind-snapshot".to_owned())
             .spawn(move || {
-                image.save(&[(&path, max_width)]).ok();
+                image
+                    .save(&[(&path, max_width)])
+                    .traced(AREA, "save a screenshot or thumbnail")
+                    .ok();
             })?;
     }
     if let Some(path) = saved {
@@ -939,12 +1042,27 @@ impl Source {
             && let Some(window) = foreground::game_window()
             && *shared.failed_window.lock() != Some(window.0 as isize)
         {
-            match WindowCapture::new(&gpu.device, window) {
-                Ok(capture) => return Ok(Self::Window(capture)),
-                Err(_) => *shared.failed_window.lock() = Some(window.0 as isize),
+            match WindowCapture::new(&gpu.device, window)
+                .traced(AREA, "capture only the game window")
+            {
+                Ok(capture) => {
+                    trace!(AREA, "capturing only the game window {:?}", window.0);
+                    return Ok(Self::Window(capture));
+                }
+                Err(_) => {
+                    trace!(
+                        AREA,
+                        "window {:?} cannot be captured alone, using the whole screen for it",
+                        window.0
+                    );
+                    *shared.failed_window.lock() = Some(window.0 as isize);
+                }
             }
         }
-        Ok(Self::Desktop(Duplicator::new(&gpu.device, &gpu.output)?))
+        trace!(AREA, "capturing the whole screen");
+        Ok(Self::Desktop(
+            Duplicator::new(&gpu.device, &gpu.output).traced(AREA, "start desktop duplication")?,
+        ))
     }
 
     fn size(&self) -> (u32, u32) {
@@ -987,13 +1105,16 @@ impl Source {
 }
 
 fn video_session(shared: &Shared) -> Result<()> {
-    let _runtime = Runtime::enter()?;
+    trace!(AREA, "video session starting");
+    let _runtime = Runtime::enter().traced(AREA, "enter the COM runtime for video")?;
     let config = &shared.config;
-    let gpu = Gpu::open(config.screen)?;
+    let gpu = Gpu::open(config.screen).traced(AREA, "open the graphics adapter")?;
     let mut capture = Source::open(shared, &gpu)?;
     let source = capture.size();
     let target = fit(source, config.height);
-    let mut converter = Converter::new(&gpu.device, &gpu.context, source, target, config.fps)?;
+    trace!(AREA, "capture size {source:?}, encoded size {target:?}");
+    let mut converter = Converter::new(&gpu.device, &gpu.context, source, target, config.fps)
+        .traced(AREA, "create the colour converter")?;
     let mut encoder = Encoder::new(
         &gpu.device,
         gpu.luid,
@@ -1001,7 +1122,8 @@ fn video_session(shared: &Shared) -> Result<()> {
         target,
         config.fps,
         config.bitrate,
-    )?;
+    )
+    .traced(AREA, "create the video encoder")?;
     shared.failure.lock().take();
     shared.emit(RecorderEvent::Encoder(encoder.name.clone()));
     let previous = shared.video_format.lock().clone();
@@ -1009,7 +1131,7 @@ fn video_session(shared: &Shared) -> Result<()> {
         shared.ring.lock().clear();
     }
 
-    let mut pacer = Pacer::new(config.fps)?;
+    let mut pacer = Pacer::new(config.fps).traced(AREA, "create the frame timer")?;
     let mut counters = Counters::new();
     let mut last: Option<ID3D11Texture2D> = None;
     let mut force_keyframe = true;
@@ -1027,18 +1149,26 @@ fn video_session(shared: &Shared) -> Result<()> {
         let mut fresh_frame = false;
         let encoding = shared.encoding();
         if !wanted(shared) {
+            trace!(AREA, "video session idle, nothing needs frames");
             return Ok(());
         }
         let mut pts = pacer.wait();
         if checked.elapsed() >= FOREGROUND_CHECK {
             checked = Instant::now();
             if capture.outdated(shared) {
+                trace!(
+                    AREA,
+                    "the captured window changed, reopening the video session"
+                );
                 return Ok(());
             }
             let now_allowed =
                 capture.is_window() || config.capture_desktop || foreground::is_fullscreen_app();
             if now_allowed && !allowed {
                 force_keyframe = true;
+            }
+            if now_allowed != allowed {
+                trace!(AREA, "capture allowed is now {now_allowed}");
             }
             allowed = now_allowed;
         }
@@ -1054,7 +1184,11 @@ fn video_session(shared: &Shared) -> Result<()> {
             } else {
                 IDLE_DELAY
             };
-        let Some(acquired) = capture.acquire(wait)? else {
+        let Some(acquired) = capture.acquire(wait).traced(AREA, "acquire a frame")? else {
+            trace!(
+                AREA,
+                "the captured window closed, reopening the video session"
+            );
             return Ok(());
         };
         if !wait.is_zero() {
@@ -1064,12 +1198,17 @@ fn video_session(shared: &Shared) -> Result<()> {
             Acquired::Frame { texture, presents } => {
                 fresh = Instant::now();
                 counters.presents += presents;
-                snapshot_requests(shared, &gpu, &texture)?;
+                snapshot_requests(shared, &gpu, &texture)
+                    .traced(AREA, "take a screenshot or thumbnail of the frame")?;
                 if encoding && allowed {
                     if retry {
                         counters.dropped += 1;
                     }
-                    last = Some(converter.convert(&texture)?);
+                    last = Some(
+                        converter
+                            .convert(&texture)
+                            .traced(AREA, "convert a frame for the encoder")?,
+                    );
                     fresh_frame = true;
                 }
             }
@@ -1078,14 +1217,23 @@ fn video_session(shared: &Shared) -> Result<()> {
                 {
                     capture.release();
                     drop(capture);
-                    capture = Source::Desktop(Duplicator::new(&gpu.device, &gpu.output)?);
+                    trace!(
+                        AREA,
+                        "no fresh frame for a pending snapshot, restarting duplication"
+                    );
+                    capture = Source::Desktop(
+                        Duplicator::new(&gpu.device, &gpu.output)
+                            .traced(AREA, "restart desktop duplication")?,
+                    );
                     fresh = Instant::now();
                 }
             }
         }
         capture.release();
         if !(encoding && allowed) {
-            encoder.poll(&mut |packet| shared.push(packet))?;
+            encoder
+                .poll(&mut |packet| shared.push(packet))
+                .traced(AREA, "collect encoder output")?;
             last = None;
             retry = false;
             counters.publish(shared, false);
@@ -1098,19 +1246,28 @@ fn video_session(shared: &Shared) -> Result<()> {
             continue;
         };
         if !fresh_frame && !retry && last_encoded.elapsed() < IDLE_FRAME {
-            encoder.poll(&mut |packet| shared.push(packet))?;
+            encoder
+                .poll(&mut |packet| shared.push(packet))
+                .traced(AREA, "collect encoder output")?;
             counters.publish(shared, true);
             continue;
         }
-        encoder.poll(&mut |packet| shared.push(packet))?;
+        encoder
+            .poll(&mut |packet| shared.push(packet))
+            .traced(AREA, "collect encoder output")?;
         let busy_since = Instant::now();
         while !encoder.ready() && busy_since.elapsed() < frame_interval {
             thread::sleep(ENCODER_POLL);
-            encoder.poll(&mut |packet| shared.push(packet))?;
+            encoder
+                .poll(&mut |packet| shared.push(packet))
+                .traced(AREA, "collect encoder output")?;
         }
         let requested = std::mem::take(&mut shared.requests.lock().keyframe);
         let keyframe = force_keyframe || requested || last_key.elapsed() >= KEY_INTERVAL;
-        if encoder.encode(frame, pts, keyframe, &mut |packet| shared.push(packet))? {
+        if encoder
+            .encode(frame, pts, keyframe, &mut |packet| shared.push(packet))
+            .traced(AREA, "encode a frame")?
+        {
             counters.encoded += 1;
             retry = false;
             force_keyframe = false;
@@ -1122,6 +1279,10 @@ fn video_session(shared: &Shared) -> Result<()> {
             retry = true;
         }
         if !published && let Some(format) = encoder.format() {
+            trace!(
+                AREA,
+                "first encoded frame, video format {}x{}", format.width, format.height
+            );
             *shared.video_format.lock() = Some(format);
             published = true;
         }

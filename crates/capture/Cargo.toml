@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 rewind-media.workspace = true
+rewind-trace.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
 

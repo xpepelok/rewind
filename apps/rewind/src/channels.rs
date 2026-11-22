@@ -372,6 +372,7 @@ fn open_tab(directory: &Path, browser: &Browser, account_id: &str) -> Result<Tab
     match session.tab() {
         Ok(tab) => Ok(tab),
         Err(failure) => {
+            rewind_trace::trace!("youtube", "FAILED open a Studio tab: {failure:?}");
             if let Some(mut dead) = shared.take() {
                 dead.close();
             }
@@ -559,6 +560,7 @@ impl Rewind {
             }
             Err(Failure::Cancelled | Failure::SignInAbandoned) => {}
             Err(failure) => {
+                rewind_trace::trace!("youtube", "FAILED sign in: {failure:?}");
                 self.toast(
                     Icon::Close,
                     text::SIGN_IN_FAILED,
@@ -857,6 +859,7 @@ impl Rewind {
                 );
             }
             Err(failure) => {
+                rewind_trace::trace!("youtube", "FAILED upload task {task:?}: {failure:?}");
                 self.youtube.queue.fail(&task.id, &failure);
                 if !matches!(failure, Failure::Cancelled) {
                     self.toast(

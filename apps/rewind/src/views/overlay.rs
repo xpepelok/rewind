@@ -171,10 +171,11 @@ pub enum Page {
     Summary,
     Update,
     Appearance,
+    Misc,
 }
 
 impl Page {
-    pub const COUNT: usize = Self::Appearance as usize + 1;
+    pub const COUNT: usize = Self::Misc as usize + 1;
 
     pub const fn bar(self) -> Option<Self> {
         match self {
@@ -217,6 +218,7 @@ impl Page {
             Self::Summary => "Просмотреть лучшие моменты",
             Self::Update => "Обновление",
             Self::Appearance => "Внешний вид",
+            Self::Misc => "Прочее",
         }
     }
 }

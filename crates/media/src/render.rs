@@ -18,6 +18,8 @@ use windows::Win32::Media::MediaFoundation::{
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::core::{GUID, HSTRING};
 
+use rewind_trace::{Traced, trace};
+
 use crate::edit::{Edit, PixelRect, Stroke};
 use crate::effects::{Coverage, Image, Plane, blur, paint_mask, scale_into, stroke_mask};
 use crate::error::{MediaError, Result};
@@ -594,14 +596,21 @@ pub fn render(
     Ok(())
 }
 
+const AREA: &str = "media";
+
 pub fn export(
     source: &Path,
     edit: &Edit,
     destination: &Path,
     progress: &dyn Fn(f32),
 ) -> Result<()> {
+    trace!(
+        AREA,
+        "exporting {source:?} into {destination:?}, full render {}, edit {edit:?}",
+        edit.needs_render()
+    );
     if edit.needs_render() {
-        render(source, edit, destination, progress)
+        render(source, edit, destination, progress).traced(AREA, "render the clip")
     } else {
         trim(source, edit.span, destination)
     }
@@ -609,7 +618,9 @@ pub fn export(
 
 pub fn export_in_place(source: &Path, edit: &Edit, progress: &dyn Fn(f32)) -> Result<()> {
     let temp = temp_path(source);
-    let result = export(source, edit, &temp, progress).and_then(|()| Ok(replace(&temp, source)?));
+    let result = export(source, edit, &temp, progress).and_then(|()| {
+        Ok(replace(&temp, source).traced(AREA, "replace the clip with its edited copy")?)
+    });
     if result.is_err() {
         std::fs::remove_file(&temp).ok();
     }

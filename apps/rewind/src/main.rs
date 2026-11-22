@@ -48,7 +48,9 @@ fn crash_line(report: &str) -> String {
 fn log_crashes() {
     let logs = Paths::resolve().logs();
     std::panic::set_hook(Box::new(move |info| {
-        watchdog::log_to(&logs, CRASH_LOG, &crash_line(&info.to_string()));
+        let report = info.to_string();
+        rewind_trace::trace!("app", "FAILED panic: {report}");
+        watchdog::log_to(&logs, CRASH_LOG, &crash_line(&report));
     }));
 }
 

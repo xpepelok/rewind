@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread;
 use std::time::Duration;
 
+use rewind_trace::{Traced, trace};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
@@ -245,6 +246,8 @@ impl Source {
     }
 }
 
+const AREA: &str = "audio";
+
 fn catch_up(fifo: &mut VecDeque<f32>) {
     if fifo.len() <= SLACK_SAMPLES {
         return;
@@ -256,7 +259,15 @@ fn catch_up(fifo: &mut VecDeque<f32>) {
             .take(excess)
             .all(|sample| sample.abs() < QUIET_LEVEL)
     };
-    if fifo.len() > LATE_SAMPLES || quiet() {
+    let late = fifo.len() > LATE_SAMPLES;
+    if late || quiet() {
+        if late {
+            trace!(
+                AREA,
+                "captured sound is {} samples behind, dropping {excess} of them",
+                fifo.len()
+            );
+        }
         fifo.drain(..excess);
     }
 }
@@ -534,7 +545,11 @@ fn to_pcm(sample: f32) -> i16 {
     (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16
 }
 
-fn open_microphone(enumerator: &IMMDeviceEnumerator, name: Option<&str>) -> Option<Source> {
+fn open_microphone(
+    enumerator: &IMMDeviceEnumerator,
+    name: Option<&str>,
+    report: bool,
+) -> Option<Source> {
     let named = name.and_then(|name| {
         endpoints(enumerator, eCapture)
             .into_iter()
@@ -544,12 +559,31 @@ fn open_microphone(enumerator: &IMMDeviceEnumerator, name: Option<&str>) -> Opti
         Some(device) => device,
         None => unsafe { enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) }.ok()?,
     };
-    Source::open(&device, false).ok()
+    let opened = Source::open(&device, false);
+    if report {
+        trace!(
+            AREA,
+            "microphone wanted {name:?}, using {:?}, opened {}",
+            device_name(&device),
+            opened.is_ok()
+        );
+        return opened.traced(AREA, "open the microphone").ok();
+    }
+    opened.ok()
 }
 
 fn open_loopback(enumerator: &IMMDeviceEnumerator) -> Option<Source> {
-    let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }.ok()?;
-    Source::open(&device, true).ok()
+    let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+        .traced(AREA, "find the default playback device")
+        .ok()?;
+    trace!(
+        AREA,
+        "opening loopback of the playback device {:?}",
+        device_name(&device)
+    );
+    Source::open(&device, true)
+        .traced(AREA, "open loopback of the playback device")
+        .ok()
 }
 
 fn default_render_id(enumerator: &IMMDeviceEnumerator) -> Option<String> {
@@ -563,12 +597,25 @@ fn open_outputs(
 ) -> (Option<Source>, Option<Source>) {
     if let Some(process) = discord {
         let id = default_render_id(enumerator);
+        trace!(
+            AREA,
+            "opening separate Discord capture, process {process}, playback device {id:?}"
+        );
         if let Ok(mut voice) = Source::process(process, Capture::Only, id.clone())
+            .traced(AREA, "capture only the Discord process tree")
             && let Ok(system) = Source::process(process, Capture::Without, id)
+                .traced(AREA, "capture everything except the Discord process tree")
         {
             voice.flush();
+            trace!(AREA, "Discord and system sound are captured separately");
             return (Some(system), Some(voice));
         }
+        trace!(
+            AREA,
+            "separate Discord capture is unavailable, falling back to device loopback"
+        );
+    } else {
+        trace!(AREA, "no Discord process, capturing device loopback");
     }
     (open_loopback(enumerator), None)
 }
@@ -636,15 +683,30 @@ pub fn run(
     on_formats: impl FnOnce(Vec<AudioFormat>),
     mut push: impl FnMut(Vec<Packet>),
 ) -> Result<()> {
-    let _runtime = Runtime::enter()?;
-    let enumerator = enumerator()?;
+    trace!(
+        AREA,
+        "audio session starting, separate tracks {}, microphone {:?}",
+        setup.separate_tracks,
+        setup.microphone
+    );
+    let _runtime = Runtime::enter().traced(AREA, "enter the COM runtime")?;
+    let enumerator = enumerator().traced(AREA, "create the device enumerator")?;
     let separate = setup.separate_tracks;
     let mut discord = if separate { discord::running() } else { None };
     let (mut loopback, mut voice) = open_outputs(&enumerator, discord);
-    let mut microphone = open_microphone(&enumerator, setup.microphone.as_deref());
+    let mut microphone = open_microphone(&enumerator, setup.microphone.as_deref(), true);
     let mut encoders = (0..track_count(separate))
         .map(Aac::new)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()
+        .traced(AREA, "create the AAC encoders")?;
+    trace!(
+        AREA,
+        "audio session ready, system {}, Discord {}, microphone {}, tracks {}",
+        loopback.is_some(),
+        voice.is_some(),
+        microphone.is_some(),
+        encoders.len()
+    );
     on_formats(
         encoders
             .iter()
@@ -671,6 +733,10 @@ pub fn run(
         if separate && ticks.is_multiple_of(DISCORD_CHECK_TICKS) {
             let current = discord_now(discord, ticks / DISCORD_CHECK_TICKS);
             if current != discord {
+                trace!(
+                    AREA,
+                    "Discord process changed from {discord:?} to {current:?}"
+                );
                 discord = current;
                 reopen = true;
             }
@@ -678,24 +744,40 @@ pub fn run(
         if ticks.is_multiple_of(DEVICE_CHECK_TICKS) {
             let current = default_render_id(&enumerator);
             if loopback.as_ref().map(|source| &source.id) != Some(&current) {
+                trace!(
+                    AREA,
+                    "default playback device is now {current:?}, reopening the outputs"
+                );
                 reopen = true;
             }
             if microphone.is_none() {
-                microphone = open_microphone(&enumerator, setup.microphone.as_deref());
+                microphone = open_microphone(&enumerator, setup.microphone.as_deref(), false);
+                if microphone.is_some() {
+                    trace!(AREA, "the microphone is available again");
+                }
             }
         }
         if !reopen {
-            reopen = [&mut loopback, &mut voice]
-                .into_iter()
-                .any(|source| source.as_mut().is_some_and(|source| source.read().is_err()));
+            reopen = [&mut loopback, &mut voice].into_iter().any(|source| {
+                source.as_mut().is_some_and(|source| {
+                    source
+                        .read()
+                        .traced(AREA, "read captured playback sound")
+                        .is_err()
+                })
+            });
         }
         if reopen {
             (loopback, voice) = open_outputs(&enumerator, discord);
         }
         if microphone
             .as_mut()
-            .is_some_and(|source| source.read().is_err())
+            .is_some_and(|source| source.read().traced(AREA, "read the microphone").is_err())
         {
+            trace!(
+                AREA,
+                "the microphone is lost, recording continues without it"
+            );
             microphone = None;
         }
 
@@ -714,13 +796,16 @@ pub fn run(
         route(&system, &mic, &speech, &mut mixed);
         let pts = chunk_pts(start, produced);
         for (encoder, pcm) in encoders.iter_mut().zip(&mixed) {
-            encoder.encode(pcm, pts, &mut |packet| batch.push(packet))?;
+            encoder
+                .encode(pcm, pts, &mut |packet| batch.push(packet))
+                .traced(AREA, "encode sound to AAC")?;
         }
         if !batch.is_empty() {
             push(std::mem::take(&mut batch));
         }
         produced += due;
     }
+    trace!(AREA, "audio session finished after {produced} frames");
     Ok(())
 }
 

@@ -14,6 +14,7 @@ use rewind_capture::{
 };
 use rewind_config::{Codec, Command, Hotkey, MicMode, Paths, Settings, Store, Tracks};
 use rewind_hotkey::{HotkeyEvent, HotkeyService, is_held};
+use rewind_trace::{Traced, trace};
 
 use crate::assets::Icon;
 use crate::channels::YouTube;
@@ -284,6 +285,28 @@ mod pictures;
 
 impl EventEmitter<UiEvent> for Rewind {}
 
+const AREA: &str = "app";
+const HEALTH_EVERY: u32 = 10;
+static HEALTH_TICKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn describe_system() {
+    if !rewind_trace::enabled() {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("rewind-specs".to_owned())
+        .spawn(|| {
+            trace!(
+                AREA,
+                "system {:?}, needs elevation {}, microphones {:?}",
+                platform::specs::collect(),
+                system::needs_elevation(),
+                rewind_capture::microphones()
+            );
+        })
+        .ok();
+}
+
 fn recorder_config(settings: &Settings, paths: &Paths, profile: Option<&str>) -> RecorderConfig {
     let video = profile
         .and_then(|executable| settings.profiles.by_executable(executable))
@@ -328,9 +351,28 @@ impl Rewind {
         let youtube = YouTube::load(paths.youtube());
         let paths_uploads = paths.uploads();
         let store = Store::new(paths.settings());
-        let mut settings = store.load().unwrap_or_default();
+        rewind_trace::open(&paths.logs());
+        let loaded = store.load();
+        rewind_trace::set_enabled(
+            loaded
+                .as_ref()
+                .is_ok_and(|settings| settings.verbose_logging),
+        );
+        let mut settings = loaded
+            .traced(AREA, "load the settings, defaults are used instead")
+            .unwrap_or_default();
+        trace!(
+            AREA,
+            "Rewind {} started, settings {settings:?}",
+            env!("CARGO_PKG_VERSION")
+        );
+        describe_system();
         if platform::nvidia::import(&mut settings) {
-            store.save(&settings).ok();
+            trace!(AREA, "imported the NVIDIA settings");
+            store
+                .save(&settings)
+                .traced(AREA, "save the imported settings")
+                .ok();
         }
         let gate = Arc::new(Mutex::new(gate_of(&settings)));
         let gate_reader = gate.clone();
@@ -350,6 +392,7 @@ impl Rewind {
         let hotkeys = HotkeyService::start(global_hotkeys(&settings), move |event| {
             hotkey_signals.unbounded_send(Signal::Hotkey(event)).ok();
         })
+        .traced(AREA, "start the global hotkeys")
         .ok();
         let mut rewind = Self {
             gallery: Vec::new(),
@@ -458,6 +501,22 @@ impl Rewind {
             return;
         };
         let stats = recorder.stats();
+        if rewind_trace::enabled()
+            && HEALTH_TICKS
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .is_multiple_of(HEALTH_EVERY)
+        {
+            trace!(
+                AREA,
+                "health, replay wanted {}, replay {:?}, recording {}, saving {}, stats {stats:?}, profile {:?}, last error {:?}",
+                self.settings.replay_enabled,
+                recorder.replay_health(),
+                recorder.is_recording(),
+                recorder.is_saving(),
+                self.active_profile,
+                self.last_error
+            );
+        }
         let recording = self
             .recorder_on(self.recording_on)
             .and_then(Recorder::recording_elapsed);
@@ -624,7 +683,15 @@ impl Rewind {
         match self
             .replay_watch
             .step(self.settings.replay_enabled, &health)
-        {
+            .inspect(|action| {
+                if *action != Action::Nothing {
+                    trace!(
+                        AREA,
+                        "replay watchdog, wanted {}, health {health:?}, action {action:?}",
+                        self.settings.replay_enabled
+                    );
+                }
+            }) {
             Action::Nothing => false,
             Action::CheckSoon => true,
             Action::Recovered => {
@@ -663,6 +730,10 @@ impl Rewind {
         }
     }
 
+    pub fn logs_dir(&self) -> PathBuf {
+        self.paths.logs()
+    }
+
     fn log(&self, line: &str) {
         watchdog::log(&self.paths.logs(), line);
     }
@@ -677,6 +748,12 @@ impl Rewind {
         {
             return;
         }
+        trace!(
+            AREA,
+            "restarting the recorder, profile {:?}, had a recorder {}",
+            self.active_profile,
+            self.recorder.is_some()
+        );
         self.recorder = None;
         let signals = self.signals.clone();
         let recorder = Recorder::start(
@@ -761,7 +838,10 @@ impl Rewind {
     }
 
     fn save(&self) {
-        self.store.save(&self.settings).ok();
+        self.store
+            .save(&self.settings)
+            .traced(AREA, "save the settings")
+            .ok();
     }
 
     pub fn change(&mut self, apply: impl FnOnce(&mut Settings), cx: &mut Context<Self>) {
@@ -771,7 +851,21 @@ impl Rewind {
             self.settings.youtube.offer_upload,
         );
         let profiles_before = self.settings.profiles.clone();
+        let verbose_before = self.settings.verbose_logging;
         apply(&mut self.settings);
+        if self.settings.verbose_logging != verbose_before {
+            trace!(AREA, "verbose logging switched off");
+            rewind_trace::set_enabled(self.settings.verbose_logging);
+            trace!(
+                AREA,
+                "verbose logging switched on, Rewind {}, settings {:?}",
+                env!("CARGO_PKG_VERSION"),
+                self.settings
+            );
+            describe_system();
+        } else {
+            trace!(AREA, "settings changed");
+        }
         self.controls.set_gains(
             self.settings.audio.system_gain(),
             self.settings.audio.mic_gain(),
@@ -822,6 +916,7 @@ impl Rewind {
         self.catcher = rewind_hotkey::KeyCatcher::start(move |hotkey| {
             signals.unbounded_send(Signal::Caught(hotkey)).ok();
         })
+        .traced(AREA, "start catching a new hotkey")
         .ok();
         if let Some(hotkeys) = &self.hotkeys {
             hotkeys.rebind(Vec::new());
@@ -860,6 +955,7 @@ impl Rewind {
     }
 
     pub fn handle(&mut self, signal: Signal, cx: &mut Context<Self>) {
+        trace!(AREA, "signal {signal:?}");
         match signal {
             Signal::Hotkey(HotkeyEvent::Pressed(command)) => self.run(command, cx),
             Signal::Hotkey(HotkeyEvent::Registered { taken }) => {
@@ -1217,6 +1313,7 @@ impl Rewind {
                         cx,
                     ),
                     Err(error) => {
+                        trace!(AREA, "FAILED join clips into {destination:?}: {error:?}");
                         std::fs::remove_file(&destination).ok();
                         rewind.toast(
                             Icon::Videocam,
@@ -1681,13 +1778,18 @@ impl Rewind {
     ) -> u64 {
         self.toast_seq += 1;
         let id = self.toast_seq;
+        let title = title.into();
+        trace!(
+            AREA,
+            "notification shown, error {error}, title {title:?}, detail {detail:?}"
+        );
         if self.toasts.len() >= TOAST_LIMIT {
             self.toasts.remove(0);
         }
         self.toasts.push(Toast {
             id,
             icon,
-            title: title.into(),
+            title,
             detail,
             error,
             leaving: false,

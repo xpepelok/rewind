@@ -1,0 +1,16 @@
+[package]
+name = "rewind-trace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_SystemInformation"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

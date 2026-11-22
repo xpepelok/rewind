@@ -722,6 +722,7 @@ pub struct Settings {
     pub stats_visible: bool,
     pub imported_nvidia: bool,
     pub choose_screen: bool,
+    pub verbose_logging: bool,
 }
 
 #[cfg(test)]

@@ -516,3 +516,44 @@ fn every_screen_keeps_its_own_replay() {
         );
     }
 }
+
+#[test]
+#[ignore = "needs a real display and gpu encoder"]
+fn the_verbose_log_follows_a_recording_and_a_replay() {
+    let _live = exclusive();
+    let root = tempfile::tempdir().unwrap();
+    rewind_trace::open(&root.path().join("logs"));
+    rewind_trace::set_enabled(true);
+    let (recorder, events) = start(root.path(), VideoCodec::H264, AudioLayout::Separate);
+    recorder.toggle_recording();
+    wait_for(&events, |event| {
+        matches!(event, RecorderEvent::RecordingStarted)
+    });
+    std::thread::sleep(RECORDING);
+    recorder.toggle_recording();
+    wait_for(&events, |event| {
+        matches!(event, RecorderEvent::RecordingSaved { .. })
+    });
+    assert!(recorder.save_replay());
+    wait_for(&events, |event| {
+        matches!(event, RecorderEvent::ReplaySaved { .. })
+    });
+    drop(recorder);
+    rewind_trace::set_enabled(false);
+    let log = std::fs::read_to_string(root.path().join("logs").join(rewind_trace::FILE)).unwrap();
+    println!("{log}");
+    for step in [
+        "recorder starting, replay true",
+        "[audio] (rewind-audio) audio session ready",
+        "[encoder] (rewind-video) using encoder",
+        "[recorder] (rewind-video) first encoded frame",
+        "recording start requested",
+        "recording written to",
+        "saving the replay to",
+        "replay save finished",
+        "recorder stopped",
+    ] {
+        assert!(log.contains(step), "the log misses {step:?}");
+    }
+    assert!(!log.contains("FAILED"), "{log}");
+}

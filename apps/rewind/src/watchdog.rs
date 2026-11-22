@@ -39,6 +39,13 @@ fn reason(health: &ReplayHealth) -> String {
     }
 }
 
+impl Action {
+    pub fn inspect(self, look: impl FnOnce(&Self)) -> Self {
+        look(&self);
+        self
+    }
+}
+
 impl ReplayWatch {
     pub fn begin_cycle(&mut self) {
         self.attempts = 0;

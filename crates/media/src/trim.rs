@@ -12,6 +12,8 @@ use windows::Win32::Media::MediaFoundation::{
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::core::{GUID, HSTRING};
 
+use rewind_trace::{Traced, trace};
+
 use crate::error::{MediaError, Result};
 use crate::probe::{open_reader, tracks};
 use crate::span::Span;
@@ -50,7 +52,14 @@ fn is_video(media_type: &IMFMediaType) -> bool {
     unsafe { media_type.GetGUID(&MF_MT_MAJOR_TYPE) }.is_ok_and(|major| major == MFMediaType_Video)
 }
 
+const AREA: &str = "media";
+
 pub fn trim(source: &Path, span: Span, destination: &Path) -> Result<()> {
+    trace!(AREA, "trimming {source:?} to {span:?} into {destination:?}");
+    cut(source, span, destination).traced(AREA, "trim the clip")
+}
+
+fn cut(source: &Path, span: Span, destination: &Path) -> Result<()> {
     if span.length().is_zero() {
         return Err(MediaError::EmptyRange);
     }
@@ -147,7 +156,9 @@ pub(crate) fn replace(from: &Path, to: &Path) -> std::io::Result<()> {
 
 pub fn trim_in_place(source: &Path, span: Span) -> Result<()> {
     let temp = temp_path(source);
-    let result = trim(source, span, &temp).and_then(|()| Ok(replace(&temp, source)?));
+    let result = trim(source, span, &temp).and_then(|()| {
+        Ok(replace(&temp, source).traced(AREA, "replace the clip with its trimmed copy")?)
+    });
     if result.is_err() {
         std::fs::remove_file(&temp).ok();
     }

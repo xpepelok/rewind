@@ -7,6 +7,7 @@ members = [
     "crates/hotkey",
     "crates/media",
     "crates/nvbus",
+    "crates/trace",
     "crates/youtube",
 ]
 
@@ -22,6 +23,7 @@ rewind-config = { path = "crates/config" }
 rewind-hotkey = { path = "crates/hotkey" }
 rewind-media = { path = "crates/media" }
 rewind-nvbus = { path = "crates/nvbus" }
+rewind-trace = { path = "crates/trace" }
 anyhow = "1"
 futures = { version = "0.3", default-features = false, features = ["std", "alloc", "async-await", "executor"] }
 gpui = { git = "https://github.com/xpepelok/zed", rev = "3534bddace483da0fa2509ec7c303f0039b28a3e" }

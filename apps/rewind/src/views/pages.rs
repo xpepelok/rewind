@@ -620,7 +620,9 @@ const PAGE_BARS: [&str; Page::COUNT] = [
     "summary-bar",
     "update-bar",
     "appearance-bar",
+    "misc-bar",
 ];
+const VERBOSE_NOTE: &str = "Записывает в журнал каждый шаг, на котором запись, повтор, сохранение или загрузка могут сорваться. Включайте, когда что-то работает неправильно, и приложите файл к сообщению об ошибке.";
 const APPEARANCE_NOTE: &str = "Тема меняет цвета и форму кнопок, переключателей и ползунков. Расположение элементов остаётся прежним.";
 const SWATCH_WIDTH: f32 = 72.0;
 const SWATCH_HEIGHT: f32 = 28.0;
@@ -669,6 +671,7 @@ impl Overlay {
             Page::Filters => self.filters_page(cx),
             Page::Summary => self.summary_page(cx),
             Page::Appearance => self.appearance(cx),
+            Page::Misc => self.misc(cx),
         };
         match page.bar() {
             Some(owner) => self.barred(owner, body),
@@ -1218,6 +1221,14 @@ impl Overlay {
                 Page::Replace,
                 cx,
             ))
+            .child(entry(
+                self,
+                "misc",
+                Icon::Settings,
+                "Прочее",
+                Page::Misc,
+                cx,
+            ))
             .when_some(encoder, |page, encoder| {
                 page.child(divider(&p)).child(
                     div()
@@ -1389,6 +1400,44 @@ impl Overlay {
                     )),
             )
             .child(footer)
+            .into_any_element()
+    }
+
+    fn misc(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let p = cx.palette();
+        let state = self.state.clone();
+        let verbose = self.state.read(cx).settings.verbose_logging;
+        let logs = self.state.read(cx).logs_dir();
+        let shown = logs.join(rewind_trace::FILE).display().to_string();
+        scroll("misc-scroll")
+            .track_scroll(self.page_scroll(Page::Misc))
+            .pt(px(8.0))
+            .child(
+                setting_row(&p)
+                    .child(title_block(
+                        "Подробное логирование",
+                        Some(VERBOSE_NOTE.to_owned()),
+                        &p,
+                    ))
+                    .child(
+                        Toggle::new("verbose-logging", verbose)
+                            .on_click(change(&state, |settings| settings.verbose_logging ^= true)),
+                    ),
+            )
+            .child(
+                self.link(
+                    "open-logs",
+                    Icon::Folder,
+                    "Открыть папку журналов",
+                    Some(shown),
+                    Icon::Open,
+                    cx,
+                )
+                .on_click(move |_, _, _| {
+                    std::fs::create_dir_all(&logs).ok();
+                    crate::platform::shell::open(&logs);
+                }),
+            )
             .into_any_element()
     }
 

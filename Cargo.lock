@@ -4746,6 +4746,7 @@ dependencies = [
  "rewind-hotkey",
  "rewind-media",
  "rewind-nvbus",
+ "rewind-trace",
  "rfd",
  "serde",
  "serde_json",
@@ -4762,6 +4763,7 @@ version = "0.1.6"
 dependencies = [
  "parking_lot",
  "rewind-media",
+ "rewind-trace",
  "tempfile",
  "thiserror 2.0.21",
  "windows 0.61.3",
@@ -4792,6 +4794,7 @@ name = "rewind-media"
 version = "0.1.6"
 dependencies = [
  "parking_lot",
+ "rewind-trace",
  "tempfile",
  "thiserror 2.0.21",
  "windows 0.61.3",
@@ -4804,6 +4807,14 @@ version = "0.1.6"
 dependencies = [
  "tempfile",
  "thiserror 2.0.21",
+ "windows 0.61.3",
+]
+
+[[package]]
+name = "rewind-trace"
+version = "0.1.6"
+dependencies = [
+ "tempfile",
  "windows 0.61.3",
 ]
 

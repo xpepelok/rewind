@@ -27,6 +27,8 @@ use windows::Win32::Media::MediaFoundation::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, Interface};
 
+use rewind_trace::{Traced, trace};
+
 use crate::com::{Runtime, Transform, first_transform, shut_down, transform_count};
 use crate::error::{CaptureError, Result};
 use crate::format::{HNS_PER_SECOND, Packet, Track, VideoCodec, VideoFormat, parameter_sets};
@@ -103,6 +105,8 @@ fn set_codec_value(api: &ICodecAPI, key: &GUID, value: u32) {
     let _ = unsafe { api.SetValue(key, &value) };
 }
 
+const AREA: &str = "encoder";
+
 impl Encoder {
     pub fn new(
         device: &ID3D11Device,
@@ -123,14 +127,30 @@ impl Encoder {
             let mut wanted = Some(codec);
             loop {
                 let Some(candidate) = wanted else {
+                    trace!(
+                        AREA,
+                        "FAILED no hardware encoder for {codec:?} or its fallbacks"
+                    );
                     return Err(CaptureError::NoEncoder);
                 };
-                if let Some(found) = find(luid, candidate)? {
+                if let Some(found) =
+                    find(luid, candidate).traced(AREA, "look for a hardware encoder")?
+                {
                     break (found, candidate);
                 }
+                trace!(
+                    AREA,
+                    "no hardware encoder for {candidate:?}, trying the fallback"
+                );
                 wanted = candidate.fallback();
             }
         };
+        trace!(
+            AREA,
+            "using encoder {name:?} for {codec:?}, {}x{} at {fps} fps, {bitrate} bit/s",
+            size.0,
+            size.1
+        );
 
         let attributes = unsafe { transform.GetAttributes() }?;
         let events = if unsafe { attributes.GetUINT32(&MF_TRANSFORM_ASYNC) }.unwrap_or(0) != 0 {
@@ -321,7 +341,10 @@ impl Encoder {
                 self.read_sequence_header();
                 return Ok(true);
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                trace!(AREA, "FAILED take encoded output: {error:?}");
+                return Err(error.into());
+            }
         }
         let Some(sample) = sample else {
             return Ok(true);

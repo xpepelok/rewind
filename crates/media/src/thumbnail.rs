@@ -11,6 +11,8 @@ use windows::Win32::Media::MediaFoundation::{
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::core::{GUID, HSTRING};
 
+use rewind_trace::Traced;
+
 use crate::error::{MediaError, Result};
 use crate::player::Frame;
 use crate::png::{Bgra, write_png};
@@ -165,7 +167,7 @@ fn full_frame(source: &Path, at: Duration) -> Result<Frame> {
 pub fn thumbnail(source: &Path, at: Duration, max_width: u32, destination: &Path) -> Result<()> {
     let frame = match scaled_frame(source, at, max_width) {
         Ok(frame) => frame,
-        Err(_) => full_frame(source, at)?,
+        Err(_) => full_frame(source, at).traced("media", "read a frame for a thumbnail")?,
     };
     write_png(
         destination,

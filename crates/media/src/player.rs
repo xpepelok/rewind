@@ -7,6 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
+use rewind_trace::Traced;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
@@ -141,7 +142,11 @@ impl Player {
                     on_frame: &on_frame,
                     on_state: &on_state,
                 };
-                if run(&path, bounds, &receiver, wake, &shared, &callbacks).is_err() {
+                rewind_trace::trace!("player", "opening {path:?}");
+                if run(&path, bounds, &receiver, wake, &shared, &callbacks)
+                    .traced("player", "play the clip in the editor")
+                    .is_err()
+                {
                     shared.lock().failed = true;
                     on_state();
                 }
@@ -504,6 +509,10 @@ fn voices(source: &BSTR, streams: &[u32], wake: &Sender<Command>) -> Vec<Voice> 
         .iter()
         .map(|stream| Voice::open(source, *stream, wake.clone()))
         .collect::<Result<_>>()
+        .traced(
+            "player",
+            "open one player per audio track, all tracks play as one",
+        )
         .unwrap_or_default()
 }
 
@@ -611,6 +620,11 @@ fn run<F: Fn(Frame), S: Fn()>(
             return Ok(());
         }
         if flags.failed.load(Ordering::Acquire) {
+            rewind_trace::trace!(
+                "player",
+                "FAILED the media engine reported an error, code {:?}",
+                unsafe { engine.GetError() }.map(|error| unsafe { error.GetErrorCode() })
+            );
             return Err(MediaError::NoFrame);
         }
         if surface.is_none() && flags.loaded.load(Ordering::Acquire) {

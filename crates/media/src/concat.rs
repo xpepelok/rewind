@@ -11,6 +11,8 @@ use windows::Win32::Media::MediaFoundation::{
 };
 use windows::core::{GUID, HSTRING};
 
+use rewind_trace::{Traced, trace};
+
 use crate::error::{MediaError, Result};
 use crate::probe::{duration, open_reader, tracks};
 use crate::span::Span;
@@ -365,7 +367,14 @@ fn write(clips: Vec<Clip>, destination: &Path, progress: &mut Progress) -> Resul
     Ok(())
 }
 
+const AREA: &str = "media";
+
 pub fn concat(sources: &[PathBuf], destination: &Path, progress: &dyn Fn(f32)) -> Result<()> {
+    trace!(AREA, "joining {sources:?} into {destination:?}");
+    join(sources, destination, progress).traced(AREA, "join the clips")
+}
+
+fn join(sources: &[PathBuf], destination: &Path, progress: &dyn Fn(f32)) -> Result<()> {
     if sources.len() < 2 {
         return Err(MediaError::TooFewClips);
     }

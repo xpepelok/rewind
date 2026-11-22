@@ -6,12 +6,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use rewind_trace::{Traced, trace};
+
 use crate::error::{CaptureError, Result};
 use crate::format::{HNS_PER_SECOND, Packet, Track};
 
 const AUDIO_SLACK_HNS: i64 = HNS_PER_SECOND;
 const SPOOL_RETRY_HNS: i64 = 5 * HNS_PER_SECOND;
 const SPOOL_PREFIX: &str = "Rewind.replay";
+const AREA: &str = "ring";
 
 #[cfg(windows)]
 const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
@@ -266,8 +269,16 @@ impl Ring {
         spool: Option<&Path>,
     ) -> Self {
         let directory = spool.map(Path::to_path_buf);
+        trace!(
+            AREA,
+            "replay buffer of {cap_bytes} bytes for {window:?}, {audio_tracks} audio tracks, spool {spool:?}"
+        );
         let spool = spool
-            .and_then(|directory| open_spool(directory).ok())
+            .and_then(|directory| {
+                open_spool(directory)
+                    .traced(AREA, "create the replay spool file")
+                    .ok()
+            })
             .map(|file| Spool::new(Arc::new(file), cap_bytes as u64));
         Self {
             window: hns(window),
@@ -331,8 +342,11 @@ impl Ring {
         }
         if self.spool.is_none() {
             let directory = self.directory.as_deref()?;
-            match open_spool(directory) {
-                Ok(file) => self.spool = Some(Spool::new(Arc::new(file), self.cap_bytes as u64)),
+            match open_spool(directory).traced(AREA, "reopen the replay spool file") {
+                Ok(file) => {
+                    trace!(AREA, "the replay spool file is back");
+                    self.spool = Some(Spool::new(Arc::new(file), self.cap_bytes as u64));
+                }
                 Err(_) => {
                     self.degrade(packet.pts);
                     return None;
@@ -348,7 +362,11 @@ impl Ring {
                 (spool.head.load(Ordering::Acquire) + len as u64).saturating_sub(spool.capacity)
             })?;
         self.make_room(floor);
-        let written = self.spool.as_ref()?.write(&packet.data);
+        let written = self
+            .spool
+            .as_ref()?
+            .write(&packet.data)
+            .traced(AREA, "write a packet to the replay spool file");
         match written {
             Ok(at) => {
                 self.retry_at = None;
@@ -364,6 +382,11 @@ impl Ring {
     fn degrade(&mut self, pts: i64) {
         self.retry_at = Some(pts.saturating_add(SPOOL_RETRY_HNS));
         self.resident_cap = usize::try_from((self.budget)()).unwrap_or(usize::MAX);
+        trace!(
+            AREA,
+            "the spool is unusable, keeping the replay in memory within {} bytes and retrying the disk later",
+            self.resident_cap
+        );
     }
 
     fn make_room(&mut self, floor: u64) {
